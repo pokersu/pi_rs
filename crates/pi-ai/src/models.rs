@@ -14,20 +14,9 @@ use crate::types::{
 };
 use crate::utils::event_stream::AssistantMessageEventStream;
 
-/// 对应 `ModelsError`（简化为 code + message）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModelsError {
-    pub code: String,
-    pub message: String,
-}
-
-impl std::fmt::Display for ModelsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
-    }
-}
-
-impl std::error::Error for ModelsError {}
+// `ModelsError` / `ModelsErrorCode` 定义于 auth/resolve（与 TS 一致：models.ts re-export
+// 自 auth/resolve.ts）。
+pub use crate::auth::resolve::{ModelsError, ModelsErrorCode};
 
 /// 对应 `Provider`（去掉 auth/OAuth，仅保留模型目录与流式分发）。
 pub trait Provider: Send + Sync {

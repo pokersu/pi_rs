@@ -2,6 +2,8 @@
 //!
 //! 文件名保持与 TS 原版一致（连字符），模块名按 Rust 惯例使用下划线。
 
+pub mod abort;
+pub mod diagnostics;
 #[path = "error-stream.rs"]
 pub mod error_stream;
 #[path = "event-stream.rs"]

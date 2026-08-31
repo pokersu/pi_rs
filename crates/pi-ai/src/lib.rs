@@ -1,16 +1,24 @@
 //! Rust 翻译自 packages/ai/src/index.ts
 //!
-//! 统一多 provider LLM API：核心类型、流抽象、工具校验、provider 框架。
+//! 统一多 provider LLM API：核心类型、流抽象、工具校验、provider 框架、认证。
 
 pub mod api;
+pub mod auth;
 pub mod models;
 pub mod providers;
 pub mod types;
 pub mod utils;
 
+pub use auth::context::default_provider_auth_context;
+pub use auth::credential_store::InMemoryCredentialStore;
+pub use auth::helpers::{env_api_key_auth, lazy_oauth};
+pub use auth::resolve::{
+    resolve_provider_auth, AuthResolutionOverrides, ModelsError, ModelsErrorCode, ProviderAuthRef,
+};
+pub use auth::types::*;
 pub use models::{
-    CreateProviderOptions, Models, ModelsError, Provider, calculate_cost, clamp_thinking_level,
-    create_models, create_provider, get_supported_thinking_levels, has_api, models_are_equal,
+    CreateProviderOptions, Models, Provider, calculate_cost, clamp_thinking_level, create_models,
+    create_provider, get_supported_thinking_levels, has_api, models_are_equal,
 };
 pub use providers::deepseek::deepseek_provider;
 pub use providers::faux::{

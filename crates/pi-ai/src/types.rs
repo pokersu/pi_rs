@@ -18,6 +18,12 @@ pub type Api = String;
 /// 对应 `ProviderId`。
 pub type ProviderId = String;
 
+/// 对应 `ProviderEnv = Record<string, string>`
+pub type ProviderEnv = BTreeMap<String, String>;
+
+/// 对应 `ProviderHeaders = Record<string, string | null>`
+pub type ProviderHeaders = BTreeMap<String, Option<String>>;
+
 /// 对应 `ImagesApi` / `ImagesProviderId`。
 pub type ImagesApi = String;
 pub type ImagesProviderId = String;
@@ -88,7 +94,7 @@ pub enum Transport {
 }
 
 /// 对应 `AbortSignal`。基于 `CancellationToken` 的轻量封装。
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub struct AbortSignal {
     token: CancellationToken,
 }
@@ -127,6 +133,31 @@ impl AbortSignal {
     /// 访问底层 token（供 provider 适配层使用）。
     pub fn token(&self) -> &CancellationToken {
         &self.token
+    }
+
+    /// 对应 `AbortSignal.timeout(ms)`：创建在 `duration` 后自动 abort 的 signal。
+    pub fn timeout(duration: std::time::Duration) -> Self {
+        let signal = Self::new();
+        let token = signal.token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(duration).await;
+            token.cancel();
+        });
+        signal
+    }
+
+    /// 对应 `AbortSignal.any(signals)`：任一子 signal abort 时本 signal 也 abort。
+    pub fn any(signals: &[AbortSignal]) -> Self {
+        let signal = Self::new();
+        for child in signals {
+            let child_token = child.token.clone();
+            let token = signal.token.clone();
+            tokio::spawn(async move {
+                child_token.cancelled().await;
+                token.cancel();
+            });
+        }
+        signal
     }
 }
 
