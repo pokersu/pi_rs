@@ -1,0 +1,12 @@
+[package]
+name = "pi-telemetry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Vendor-neutral telemetry contracts and typed schema utilities for pi (Rust port)"
+
+[dependencies]
+futures.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

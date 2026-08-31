@@ -1,0 +1,19 @@
+[package]
+name = "pi-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Agent runtime with tool calling and state management (Rust port)"
+
+[dependencies]
+pi-telemetry = { path = "../pi-telemetry" }
+pi-ai = { path = "../pi-ai" }
+async-trait.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+similar.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]

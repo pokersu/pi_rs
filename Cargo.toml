@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pi-telemetry",
+    "crates/pi-ai",
+    "crates/pi-agent",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+async-trait = "0.1"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jsonschema = "0.28"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+similar = "2"
+tokio = { version = "1", features = ["rt", "macros", "sync"] }
+tokio-util = "0.7"
