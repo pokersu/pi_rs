@@ -13,7 +13,7 @@ pub use auth::context::default_provider_auth_context;
 pub use auth::credential_store::InMemoryCredentialStore;
 pub use auth::helpers::{env_api_key_auth, lazy_oauth};
 pub use auth::resolve::{
-    resolve_provider_auth, AuthResolutionOverrides, ModelsError, ModelsErrorCode, ProviderAuthRef,
+    AuthResolutionOverrides, ModelsError, ModelsErrorCode, ProviderAuthRef, resolve_provider_auth,
 };
 pub use auth::types::*;
 pub use models::{
@@ -31,6 +31,9 @@ pub use utils::event_stream::{
     AssistantMessageEventStream, EventStream, create_assistant_message_event_stream,
 };
 pub use utils::json_parse::{parse_json_with_repair, parse_streaming_json, repair_json};
+pub use utils::retry::{
+    RetryCallbacks, RetryPolicy, is_retryable_assistant_error, retry_assistant_call,
+};
 pub use utils::text::{ContentTextInput, content_text};
 pub use utils::uuid::uuidv7;
 pub use utils::validation::{validate_tool_arguments, validate_tool_call};

@@ -114,7 +114,10 @@ pub struct AuthOperationOptions {
 
 /// 对应 `CredentialStore.modify` 的回调：读当前凭据，返回新的凭据（或 None 保持不变）。
 pub type CredentialModifyFn = Box<
-    dyn FnOnce(Option<Credential>) -> Pin<Box<dyn Future<Output = Result<Option<Credential>, BoxError>> + Send>>
+    dyn FnOnce(
+            Option<Credential>,
+        )
+            -> Pin<Box<dyn Future<Output = Result<Option<Credential>, BoxError>> + Send>>
         + Send,
 >;
 
@@ -129,7 +132,10 @@ pub trait CredentialStore: Send + Sync {
     ) -> Result<Option<Credential>, BoxError>;
 
     /// 对应 `list(options?)`。
-    async fn list(&self, options: Option<&AuthOperationOptions>) -> Result<Vec<CredentialInfo>, BoxError>;
+    async fn list(
+        &self,
+        options: Option<&AuthOperationOptions>,
+    ) -> Result<Vec<CredentialInfo>, BoxError>;
 
     /// 对应 `modify(providerId, fn, options?)`：唯一的写路径，按 provider 串行化。
     async fn modify(
@@ -140,8 +146,11 @@ pub trait CredentialStore: Send + Sync {
     ) -> Result<Option<Credential>, BoxError>;
 
     /// 对应 `delete(providerId, options?)`：移除凭据（登出）。
-    async fn delete(&self, provider_id: &str, options: Option<&AuthOperationOptions>)
-        -> Result<(), BoxError>;
+    async fn delete(
+        &self,
+        provider_id: &str,
+        options: Option<&AuthOperationOptions>,
+    ) -> Result<(), BoxError>;
 }
 
 /// 对应 `AuthContext`：认证解析所需的环境访问，可注入以便测试与浏览器。
@@ -361,7 +370,8 @@ pub trait ApiKeyAuth: Send + Sync {
     }
 
     /// 对应 `resolve(input)`。
-    async fn resolve(&self, input: &ApiKeyResolveInput<'_>) -> Result<Option<AuthResult>, BoxError>;
+    async fn resolve(&self, input: &ApiKeyResolveInput<'_>)
+    -> Result<Option<AuthResult>, BoxError>;
 }
 
 /// 对应 `OAuthAuth`。
@@ -381,8 +391,10 @@ pub trait OAuthAuth: Send + Sync {
     }
 
     /// 对应 `login(interaction)`。
-    async fn login(&self, interaction: &ProviderAuthInteraction<'_>)
-        -> Result<OAuthCredential, BoxError>;
+    async fn login(
+        &self,
+        interaction: &ProviderAuthInteraction<'_>,
+    ) -> Result<OAuthCredential, BoxError>;
 
     /// 对应 `refresh(credential, signal)`：交换 refresh token。失败时返回错误
     /// （invalid_grant 等）。
@@ -397,6 +409,7 @@ pub trait OAuthAuth: Send + Sync {
 }
 
 /// 对应 `ProviderAuth`。`apiKey`/`oauth` 至少其一存在。
+#[derive(Clone)]
 pub struct ProviderAuth {
     pub api_key: Option<Arc<dyn ApiKeyAuth>>,
     pub oauth: Option<Arc<dyn OAuthAuth>>,

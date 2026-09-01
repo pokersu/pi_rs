@@ -45,7 +45,10 @@ impl ApiKeyAuth for EnvApiKeyAuth {
         })
     }
 
-    async fn resolve(&self, input: &ApiKeyResolveInput<'_>) -> Result<Option<AuthResult>, BoxError> {
+    async fn resolve(
+        &self,
+        input: &ApiKeyResolveInput<'_>,
+    ) -> Result<Option<AuthResult>, BoxError> {
         input
             .signal
             .throw_if_aborted()
@@ -92,9 +95,8 @@ pub fn env_api_key_auth(name: impl Into<String>, env_vars: Vec<String>) -> Arc<d
 }
 
 /// 对应 `lazyOAuth` 的 `load: () => Promise<OAuthAuth>`。
-pub type OAuthLoadFn = Box<
-    dyn Fn() -> Pin<Box<dyn Future<Output = Arc<dyn OAuthAuth>> + Send>> + Send + Sync,
->;
+pub type OAuthLoadFn =
+    Box<dyn Fn() -> Pin<Box<dyn Future<Output = Arc<dyn OAuthAuth>> + Send>> + Send + Sync>;
 
 /// 对应 `lazyOAuth` 的输入。
 pub struct LazyOAuthInput {

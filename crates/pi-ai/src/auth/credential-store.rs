@@ -10,7 +10,7 @@ use crate::auth::types::{
     AuthOperationOptions, Credential, CredentialInfo, CredentialModifyFn, CredentialStore,
 };
 use crate::types::AbortSignal;
-use crate::utils::abort::{operation_signal, race_with_abort_signal, BoxError};
+use crate::utils::abort::{BoxError, operation_signal, race_with_abort_signal};
 
 struct Inner {
     credentials: Mutex<BTreeMap<String, Credential>>,
@@ -59,7 +59,9 @@ impl InMemoryCredentialStore {
         };
         let operation = async move {
             let _guard = lock.lock().await;
-            signal.throw_if_aborted().map_err(|e| Box::new(e) as BoxError)?;
+            signal
+                .throw_if_aborted()
+                .map_err(|e| Box::new(e) as BoxError)?;
             task().await
         };
         race_with_abort_signal(operation, signal).await
@@ -75,15 +77,28 @@ impl CredentialStore for InMemoryCredentialStore {
         options: Option<&AuthOperationOptions>,
     ) -> Result<Option<Credential>, BoxError> {
         if let Some(signal) = options.and_then(|o| o.signal.as_ref()) {
-            signal.throw_if_aborted().map_err(|e| Box::new(e) as BoxError)?;
+            signal
+                .throw_if_aborted()
+                .map_err(|e| Box::new(e) as BoxError)?;
         }
-        Ok(self.inner.credentials.lock().await.get(provider_id).cloned())
+        Ok(self
+            .inner
+            .credentials
+            .lock()
+            .await
+            .get(provider_id)
+            .cloned())
     }
 
     /// 对应 `list(options?)`。
-    async fn list(&self, options: Option<&AuthOperationOptions>) -> Result<Vec<CredentialInfo>, BoxError> {
+    async fn list(
+        &self,
+        options: Option<&AuthOperationOptions>,
+    ) -> Result<Vec<CredentialInfo>, BoxError> {
         if let Some(signal) = options.and_then(|o| o.signal.as_ref()) {
-            signal.throw_if_aborted().map_err(|e| Box::new(e) as BoxError)?;
+            signal
+                .throw_if_aborted()
+                .map_err(|e| Box::new(e) as BoxError)?;
         }
         let credentials = self.inner.credentials.lock().await;
         Ok(credentials
@@ -113,9 +128,15 @@ impl CredentialStore for InMemoryCredentialStore {
             async move {
                 let current = inner.credentials.lock().await.get(&pid).cloned();
                 let next = fn_(current.clone()).await?;
-                signal.throw_if_aborted().map_err(|e| Box::new(e) as BoxError)?;
+                signal
+                    .throw_if_aborted()
+                    .map_err(|e| Box::new(e) as BoxError)?;
                 if let Some(next_cred) = &next {
-                    inner.credentials.lock().await.insert(pid.clone(), next_cred.clone());
+                    inner
+                        .credentials
+                        .lock()
+                        .await
+                        .insert(pid.clone(), next_cred.clone());
                 }
                 Ok(next.or(current))
             }

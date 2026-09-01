@@ -3,6 +3,8 @@
 use std::sync::Arc;
 
 use crate::api::openai_completions::openai_completions_stream;
+use crate::auth::helpers::env_api_key_auth;
+use crate::auth::types::ProviderAuth;
 use crate::models::{CreateProviderOptions, Provider, create_provider};
 use crate::types::{InputModality, Model, ModelCost, ModelCostRates};
 
@@ -55,12 +57,18 @@ pub fn openai_provider() -> Arc<dyn Provider> {
             0.6,
         ),
     ];
-    let stream =
-        openai_completions_stream("https://api.openai.com/v1".to_string(), "OPENAI_API_KEY");
+    let stream = openai_completions_stream("https://api.openai.com/v1".to_string());
     create_provider(CreateProviderOptions {
         id: "openai".to_string(),
         name: Some("OpenAI".to_string()),
         base_url: Some("https://api.openai.com/v1".to_string()),
+        auth: ProviderAuth {
+            api_key: Some(env_api_key_auth(
+                "OpenAI API key",
+                vec!["OPENAI_API_KEY".to_string()],
+            )),
+            oauth: None,
+        },
         models,
         stream,
     })

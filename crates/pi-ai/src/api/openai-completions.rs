@@ -306,20 +306,22 @@ async fn stream_request(
 }
 
 /// 构造一个 OpenAI Chat Completions 兼容的 stream 函数。
-/// `api_key_env` 为环境变量名（如 "OPENAI_API_KEY" / "DEEPSEEK_API_KEY"）。
-pub fn openai_completions_stream(base_url: String, api_key_env: &'static str) -> StreamFunction {
+/// api key 由上层（`Models::stream_simple`）解析并注入到 `options.stream.request.api_key`，
+/// 这里不再直接读环境变量。
+pub fn openai_completions_stream(base_url: String) -> StreamFunction {
     Arc::new(move |model, context, options| {
         let outer = create_assistant_message_event_stream();
         let producer = outer.clone();
         let base_url = base_url.clone();
         let model = model.clone();
         let body = build_body(&model, context, options);
-        let api_key = std::env::var(api_key_env).ok();
+        let api_key = options.and_then(|o| o.stream.request.api_key.clone());
+        let provider = model.provider.clone();
         tokio::spawn(async move {
             match api_key {
                 None => {
                     let error = create_error_message(
-                        &format!("Missing API key: {api_key_env}"),
+                        &format!("Missing API key for provider: {provider}"),
                         &model.api,
                         &model.provider,
                         &model.id,

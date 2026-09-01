@@ -10,6 +10,7 @@ pub mod error_stream;
 pub mod event_stream;
 #[path = "json-parse.rs"]
 pub mod json_parse;
+pub mod retry;
 pub mod text;
 pub mod uuid;
 pub mod validation;

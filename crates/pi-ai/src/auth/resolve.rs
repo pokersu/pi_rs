@@ -12,7 +12,7 @@ use crate::auth::types::{
     CredentialStore, OAuthAuth, OAuthCredential, ProviderAuth,
 };
 use crate::types::{AbortSignal, ProviderEnv};
-use crate::utils::abort::{operation_signal, race_with_abort_signal, BoxError};
+use crate::utils::abort::{BoxError, operation_signal, race_with_abort_signal};
 use crate::utils::diagnostics::format_thrown_value;
 
 /// 对应 `ModelsErrorCode`。
@@ -126,7 +126,9 @@ async fn resolve_provider_auth_with_signal(
     overrides: Option<&AuthResolutionOverrides>,
     signal: &AbortSignal,
 ) -> Result<Option<AuthResult>, BoxError> {
-    signal.throw_if_aborted().map_err(|e| Box::new(e) as BoxError)?;
+    signal
+        .throw_if_aborted()
+        .map_err(|e| Box::new(e) as BoxError)?;
     let request_auth_context: Box<dyn AuthContext> =
         if let Some(env) = overrides.and_then(|o| o.env.clone()) {
             Box::new(OverlayEnvAuthContext {

@@ -6,6 +6,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use crate::auth::types::ProviderAuth;
 use crate::models::{CreateProviderOptions, Provider, create_provider};
 use crate::types::{
     AssistantMessage, AssistantMessageEvent, ContentBlock, ErrorStopReason, Model, StopReason,
@@ -298,6 +299,10 @@ pub fn faux_provider(models: Vec<Model>) -> FauxProviderHandle {
         id: DEFAULT_PROVIDER.to_string(),
         name: Some("Faux".to_string()),
         base_url: Some(DEFAULT_BASE_URL.to_string()),
+        auth: ProviderAuth {
+            api_key: None,
+            oauth: None,
+        },
         models: models.clone(),
         stream,
     });

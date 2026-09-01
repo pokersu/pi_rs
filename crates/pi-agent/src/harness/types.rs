@@ -88,6 +88,37 @@ impl std::fmt::Display for ExecutionError {
 
 impl std::error::Error for ExecutionError {}
 
+/// 对应 `CompactionErrorCode`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionErrorCode {
+    Aborted,
+    SummarizationFailed,
+}
+
+/// 对应 `CompactionError`
+#[derive(Debug, Clone)]
+pub struct CompactionError {
+    pub code: CompactionErrorCode,
+    pub message: String,
+}
+
+impl CompactionError {
+    pub fn new(code: CompactionErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for CompactionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for CompactionError {}
+
 /// 对应 `FileInfo`
 #[derive(Debug, Clone)]
 pub struct FileInfo {

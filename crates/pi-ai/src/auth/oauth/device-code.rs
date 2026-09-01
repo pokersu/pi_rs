@@ -29,8 +29,7 @@ pub enum OAuthDeviceCodePollResult<T> {
 /// 对应 `OAuthDeviceCodePollOptions<T>`。
 /// 对应 `OAuthDeviceCodePollOptions<T>.poll`。
 pub type OAuthDeviceCodePollFn<T> = Box<
-    dyn Fn()
-        -> Pin<Box<dyn Future<Output = Result<OAuthDeviceCodePollResult<T>, BoxError>> + Send>>
+    dyn Fn() -> Pin<Box<dyn Future<Output = Result<OAuthDeviceCodePollResult<T>, BoxError>> + Send>>
         + Send,
 >;
 
@@ -69,14 +68,23 @@ pub async fn poll_oauth_device_code_flow<T>(
         .expires_in_seconds
         .map(|s| now_ms().saturating_add(s.saturating_mul(1000)))
         .unwrap_or(u64::MAX);
-    let mut interval_ms = MINIMUM_INTERVAL_MS
-        .max(options.interval_seconds.unwrap_or(DEFAULT_POLL_INTERVAL_SECONDS).saturating_mul(1000));
+    let mut interval_ms = MINIMUM_INTERVAL_MS.max(
+        options
+            .interval_seconds
+            .unwrap_or(DEFAULT_POLL_INTERVAL_SECONDS)
+            .saturating_mul(1000),
+    );
 
     let mut slow_down_responses = 0u64;
     if options.wait_before_first_poll.unwrap_or(false) {
         let remaining_ms = deadline_ms.saturating_sub(now_ms());
         if remaining_ms > 0 {
-            abortable_sleep(interval_ms.min(remaining_ms), &options.signal, CANCEL_MESSAGE).await?;
+            abortable_sleep(
+                interval_ms.min(remaining_ms),
+                &options.signal,
+                CANCEL_MESSAGE,
+            )
+            .await?;
         }
     }
 
@@ -109,7 +117,12 @@ pub async fn poll_oauth_device_code_flow<T>(
             break;
         }
 
-        abortable_sleep(interval_ms.min(remaining_ms), &options.signal, CANCEL_MESSAGE).await?;
+        abortable_sleep(
+            interval_ms.min(remaining_ms),
+            &options.signal,
+            CANCEL_MESSAGE,
+        )
+        .await?;
     }
 
     Err(if slow_down_responses > 0 {
