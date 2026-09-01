@@ -4,6 +4,7 @@ members = [
     "crates/pi-telemetry",
     "crates/pi-ai",
     "crates/pi-agent",
+    "crates/demo-agent",
 ]
 
 [workspace.package]
