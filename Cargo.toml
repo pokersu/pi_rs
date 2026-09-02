@@ -4,6 +4,7 @@ members = [
     "crates/pi-telemetry",
     "crates/pi-ai",
     "crates/pi-agent",
+    "crates/pi-tools",
     "crates/demo-agent",
 ]
 

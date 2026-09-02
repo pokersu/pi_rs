@@ -6,6 +6,7 @@
 //! - 启动后提示 `> `，输入消息回车执行；输入 `exit` / `quit` 或 Ctrl-D 退出。
 //! - 每次调用工具前提示 `Y/n` 审批；拒绝（`n`）仅阻止当前工具，turn 继续。
 //! - 会话记录到内存 session，prompt 前检查上下文 token 阈值，超限时自动 compaction。
+//! - 可选 `--tools-dir <dir>` 加载 HTTP 工具配置（JSON），如 github_get_pr。
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -22,13 +23,16 @@ use pi_agent::harness::tools::{
 };
 use pi_agent::harness::{ExecutionEnv, NodeExecutionEnv};
 use pi_agent::{
-    Agent, AgentEvent, AgentMessage, AgentOptions, BeforeToolCallContext, BeforeToolCallFn,
-    BeforeToolCallResult, ToolExecutionMode,
+    Agent, AgentEvent, AgentMessage, AgentOptions, AgentTool, BeforeToolCallContext,
+    BeforeToolCallFn, BeforeToolCallResult, ToolExecutionMode,
 };
 use pi_ai::{AssistantMessageEvent, create_models, deepseek_provider, openai_provider, uuidv7};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    // 0. 解析命令行参数（--tools-dir <dir>）。
+    let tools_dir = parse_tools_dir();
+
     // 1. LLM：注册 provider，构造 stream fn 和默认模型。
     let models = Arc::new(create_models());
     models.set_provider(openai_provider());
@@ -49,12 +53,18 @@ async fn main() {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| ".".to_string());
     let env: Arc<dyn ExecutionEnv> = Arc::new(NodeExecutionEnv::new(cwd));
-    let tools = vec![
+    let mut tools = vec![
         create_bash_tool(env.clone()),
         create_read_tool(env.clone()),
         create_write_tool(env.clone()),
         create_edit_tool(env.clone()),
     ];
+
+    // 2.1 加载 HTTP 工具：默认 ./tools.d，可选 --tools-dir 额外追加。
+    load_http_tools(&mut tools, std::path::Path::new("tools.d"), "默认");
+    if let Some(dir) = &tools_dir {
+        load_http_tools(&mut tools, std::path::Path::new(dir), "指定");
+    }
 
     // 3. 审批门：每次工具调用前读 Y/n；拒绝仅阻止当前工具，不终止 turn。
     let before_tool_call = make_approval_gate();
@@ -106,16 +116,11 @@ async fn main() {
                 }
                 AgentEvent::ToolExecutionEnd {
                     tool_name,
-                    result,
                     is_error,
                     ..
                 } => {
                     println!();
                     println!("[工具] {tool_name} 完成 (error={is_error})");
-                    let pretty = serde_json::to_string_pretty(&result).unwrap_or_default();
-                    if !pretty.is_empty() && pretty != "null" {
-                        println!("[结果] {pretty}");
-                    }
                 }
                 _ => {}
             }
@@ -158,6 +163,48 @@ async fn main() {
     }
 
     println!("再见。");
+}
+
+/// 解析命令行参数，返回 `--tools-dir <dir>` 指定的目录。
+fn parse_tools_dir() -> Option<String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut dir = None;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--tools-dir" {
+            if i + 1 < args.len() {
+                dir = Some(args[i + 1].clone());
+                i += 2;
+            } else {
+                eprintln!("--tools-dir 需要一个目录参数");
+                std::process::exit(2);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    dir
+}
+
+/// 从目录加载 HTTP 工具并追加到工具列表；目录不存在时静默跳过。
+fn load_http_tools(tools: &mut Vec<AgentTool>, dir: &std::path::Path, label: &str) {
+    if !dir.exists() {
+        return;
+    }
+    match pi_tools::load_tools_from_dir(dir) {
+        Ok(http_tools) => {
+            println!(
+                "[http-tools] {label}目录 {} 加载了 {} 个工具:",
+                dir.display(),
+                http_tools.len()
+            );
+            for t in &http_tools {
+                println!("  - {}", t.name());
+            }
+            tools.extend(http_tools);
+        }
+        Err(e) => eprintln!("[http-tools] {label}目录加载失败: {e}"),
+    }
 }
 
 /// prompt 前检查上下文 token 阈值，超限则执行 compaction 并更新 agent 上下文。

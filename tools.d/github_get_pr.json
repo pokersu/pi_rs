@@ -1,0 +1,24 @@
+{
+  "name": "github_get_pr",
+  "description": "Get a GitHub pull request by owner, repo and number.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "owner": { "type": "string", "description": "Repository owner" },
+      "repo": { "type": "string", "description": "Repository name" },
+      "number": { "type": "integer", "description": "Pull request number" }
+    },
+    "required": ["owner", "repo", "number"]
+  },
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/{owner}/{repo}/pulls/{number}"
+  },
+  "headers": {
+    "Accept": "application/vnd.github+json"
+  },
+  "auth": {
+    "type": "bearer",
+    "token_env": "GITHUB_TOKEN"
+  }
+}

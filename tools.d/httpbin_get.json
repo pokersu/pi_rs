@@ -1,0 +1,17 @@
+{
+  "name": "httpbin_get",
+  "description": "Make a GET request to httpbin.org. Extra parameters are sent as query parameters.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "message": {
+        "type": "string",
+        "description": "A message echoed back in the response args"
+      }
+    }
+  },
+  "request": {
+    "method": "GET",
+    "url": "https://httpbin.org/get"
+  }
+}

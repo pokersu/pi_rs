@@ -1,14 +1,18 @@
 [package]
-name = "demo-agent"
+name = "pi-tools"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Command-line demo agent with per-tool approval gate"
+description = "Reusable agent tools for pi"
 publish = false
 
 [dependencies]
 pi-agent = { path = "../pi-agent" }
 pi-ai = { path = "../pi-ai" }
-pi-tools = { path = "../pi-tools" }
+base64.workspace = true
+reqwest.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
 tokio.workspace = true
