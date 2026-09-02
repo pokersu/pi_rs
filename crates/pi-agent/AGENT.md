@@ -4,7 +4,7 @@ agent 运行时核心：`Agent` 类 + 双层循环 + 工具执行管线 + 消息
 
 ## 复刻来源
 
-1:1 复刻自 [earendil-works/pi](https://github.com/earendil-works/pi) 的 `packages/agent`，50 个 TS 文件全部对应（Rust 53 文件，多出的 `mod.rs`/`node.rs` 是 Rust 的模块声明与 re-export 惯例）：
+1:1 复刻自 [earendil-works/pi](https://github.com/earendil-works/pi) 的 `packages/agent`，50 个 TS 文件全部对应（Rust 54 文件，多出的 `mod.rs`/`node.rs` 是 Rust 的模块声明与 re-export 惯例）：
 
 | 原 TS 目录/文件 | Rust 对应 |
 |---|---|
@@ -29,7 +29,7 @@ agent 运行时核心：`Agent` 类 + 双层循环 + 工具执行管线 + 消息
 - 抽象：`FileSystem`/`Shell`/`ExecutionEnv`（文件与进程能力）、`Skill`/`PromptTemplate`。
 - 内置工具：`read`/`write`/`edit`（含 diff 算法）/`bash`。
 - 消息：`AgentMessage` 含 4 种自定义消息（bashExecution/custom/branchSummary/compactionSummary）+ `convertToLlm`。
-- session：`SessionState`（内存）+ `InMemory` 与 `JSONL` 两种后端 + `reducer`（单写者记录协议的状态归约）。
+- session：`SessionState`（内存）+ `InMemory` 与 `JSONL` 两种后端 + `reducer`（单写者记录协议的状态归约）+ 分支查询（`find_entries_on_branch`）+ lane 视图（`Session.view`）+ 仓库 `fork`。
 - compaction：token 估计、切点查找、branch summary。
 - skills / prompt-templates / system-prompt / telemetry / events / agent-harness。
 
@@ -41,17 +41,17 @@ agent 运行时核心：`Agent` 类 + 双层循环 + 工具执行管线 + 消息
 4. **消息队列**：`steer()`（当前 turn 后注入）与 `followUp()`（agent 停止后注入），`one-at-a-time`/`all` 两种 drain 模式。
 5. **消息边界**：内部 `AgentMessage`（含自定义消息）在 LLM 调用边界通过 `convert_to_llm` 转成 `Message`，`transform_context` 做上下文窗口管理。
 6. **session 单写者记录协议**：`Entry`（消息/配置变更/compaction 等）与 `LaneRecord`（操作/工具/队列记录）按 seq 严格递增 append；`reducer.rs` 从恢复切片重建 lane 状态并校验一致性（`validate_record_log`）。
-7. **compaction**：`estimate_tokens`（字符启发式）、`should_compact`（阈值判断）、`find_cut_point`（保持近期 token 预算的切点）。
+7. **compaction**：`estimate_tokens`（字符启发式）、`should_compact`（阈值判断）、`find_cut_point`（保持近期 token 预算的切点）、`generate_summary`（调 LLM 生成/更新 summary，含重试）与 `generate_branch_summary`（branch 摘要）。
 
 ## 复刻过程中的变化
 
 1. **`CustomAgentMessages` → enum**：TS 用 declaration merging 扩展 `AgentMessage`，Rust 改为 `AgentMessage` enum（User/Assistant/ToolResult + 4 种自定义消息），`role()` 返回判别字符串。
 2. **`AsyncIterable` → `Vec`**：`SessionSearch.search`、`scanningEntries` 返回 `Vec`（Rust 无内置异步生成器，流式可后续用 `Stream` 补）。
-3. **LLM 调用路径留空**：`generateBranchSummary`/`completeSimpleWithRetries`/`prepareCompaction`/`generateSummary` 依赖模型流式调用，保留 prompt 常量与 prepare/collect 逻辑，实际 LLM 调用待接 provider 时补。
-4. **bash 流式 `onUpdate` 省略**：`Shell.exec` 用 `std::process::Command::output` 一次性返回，省略 100ms 节流的流式进度。
+3. **compaction LLM 调用已补齐**：`complete_simple_with_retries`（有界重试）、`generate_summary`/`generate_summary_with_usage`、`prepare_compaction`、`generate_branch_summary`/`collect_entries_for_branch_summary` 均已实现，走 `models.complete_simple` 调 LLM。
+4. **bash 流式 `onUpdate` 已补**：`Shell.exec` 逐行读取 stdout，经 100ms 节流后通过 `on_update` 回调流式上报。
 5. **read 工具图片**：返回提示而非 base64 attachment（TS 依赖 photon wasm）。
 6. **`jsonl::list` 简化**：元数据目录扫描返回空列表。
-7. **conformance 测试简化**：`harness/session/testing/conformance.ts`（1000+ 行 storage 契约测试）简化为空工厂，保留 fixture 类型。
+7. **conformance 测试未复刻**：`harness/session/testing/conformance.ts`（1000+ 行 storage 契约测试）未复刻（`create_session_backend_conformance` 返回空列表）；但 `SessionStorage` 已补 `find_entries_on_branch`，`SessionTree` 已补 `find_entry`/`find_entries_on_branch`/`find_entry_on_branch`，`Session` 已补 `view`，`SessionRepo`（InMemory + Jsonl）已补 `fork`。
 8. **`AgentHarness` 操作方法是占位**：与 TS 原版一致（原版也是 `unavailable()` 返回 `HarnessNotImplemented`），仅 getter/setter 真实现。
 9. **TypeBox → JSON 值**：`AgentTool` 参数用 `serde_json::Value`，`prepareArguments` 暂未实现。
 
