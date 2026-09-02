@@ -13,7 +13,7 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use pi_agent::harness::compaction::compaction::{
-    CompactResult, DEFAULT_COMPACTION_SETTINGS, compact, estimate_context_tokens,
+    CompactResult, DEFAULT_COMPACTION_SETTINGS, compact, estimate_context_tokens, estimate_tokens,
     prepare_compaction, should_compact,
 };
 use pi_agent::harness::session::context::build_session_context;
@@ -101,11 +101,25 @@ async fn main() {
                     std::io::stdout().flush().ok();
                 }
                 AgentEvent::MessageEnd { message } => {
-                    if let AgentMessage::Assistant(a) = &message
-                        && let Some(err) = &a.error_message
-                    {
-                        println!();
-                        println!("[错误] {err}");
+                    if let AgentMessage::Assistant(a) = &message {
+                        if let Some(err) = &a.error_message {
+                            println!();
+                            println!("[错误] {err}");
+                        } else {
+                            // openai-responses 流无 `start` 事件，文本在消息结束时一次性显示。
+                            let text: String = a
+                                .content
+                                .iter()
+                                .filter_map(|block| match block {
+                                    pi_ai::ContentBlock::Text(t) => Some(t.text.as_str()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join("");
+                            if !text.is_empty() {
+                                println!("{text}");
+                            }
+                        }
                     }
                     if matches!(
                         message,
@@ -245,7 +259,9 @@ async fn maybe_compact(
             session_log.append_compaction(result);
             let new_branch = session_log.get_branch();
             let new_ctx = build_session_context(&new_branch);
-            let after = estimate_context_tokens(&new_ctx.messages).tokens;
+            // 压缩后 retained_tail 里 assistant 的 usage 反映的是压缩前的 context 大小，
+            // 不能再用 usage 报告值估算；改用启发式 estimateTokens 重新估算。
+            let after: u64 = new_ctx.messages.iter().map(estimate_tokens).sum();
             agent.set_messages(new_ctx.messages);
             println!("[compaction] 完成，压缩后约 {after} tokens。");
         }

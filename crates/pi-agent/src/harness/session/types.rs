@@ -332,6 +332,17 @@ pub struct EntryQuery {
     pub cursor: Option<EntryCursor>,
 }
 
+/// 对应 `BranchBounds`：分支扫描的边界。默认：整个路径（叶到根）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BranchBounds {
+    /// 默认：视图所在 lane 的叶子。
+    pub start: Option<String>,
+    /// 扫描在首个匹配 type 后停止（包含该 entry）。
+    pub stop_at_type: Option<String>,
+    /// 扫描到该 id 后停止（包含该 entry）。
+    pub stop_at_id: Option<String>,
+}
+
 /// 对应 `RecordQuery`
 #[derive(Debug, Clone, Default)]
 pub struct RecordQuery {
@@ -435,6 +446,32 @@ impl std::fmt::Display for SessionError {
 
 impl std::error::Error for SessionError {}
 
+/// 对应 `ForkPosition`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForkPosition {
+    Before,
+    At,
+}
+
+/// 对应 `ForkOptions`（默认 `scope` 为 `branch`）。
+#[derive(Debug, Clone)]
+pub enum ForkOptions {
+    Branch {
+        entry_id: Option<String>,
+        position: Option<ForkPosition>,
+    },
+    Tree,
+}
+
+impl Default for ForkOptions {
+    fn default() -> Self {
+        ForkOptions::Branch {
+            entry_id: None,
+            position: None,
+        }
+    }
+}
+
 /// 对应 `SessionStorage`（简化：去掉泛型元数据参数）。
 #[async_trait::async_trait]
 pub trait SessionStorage: Send + Sync {
@@ -446,6 +483,13 @@ pub trait SessionStorage: Send + Sync {
     async fn append_record(&self, record: LaneRecord) -> Result<LaneRecord, SessionError>;
     async fn get_entry(&self, id: &str) -> Result<Option<Entry>, SessionError>;
     async fn find_entries(&self, query: &EntryQuery) -> Result<Vec<Entry>, SessionError>;
+    async fn find_entries_on_branch(
+        &self,
+        query: &EntryQuery,
+        start: &str,
+        stop_at_type: Option<&str>,
+        stop_at_id: Option<&str>,
+    ) -> Result<Vec<Entry>, SessionError>;
     async fn find_records(&self, query: &RecordQuery) -> Result<Vec<LaneRecord>, SessionError>;
     async fn find_open_operations(
         &self,
@@ -475,6 +519,17 @@ pub trait SessionTree: Send + Sync {
     async fn get_label(&self, target_id: &str) -> Result<Option<String>, SessionError>;
     async fn set_label(&self, target_id: &str, label: Option<&str>) -> Result<(), SessionError>;
     async fn find_entries(&self, query: &EntryQuery) -> Result<Vec<Entry>, SessionError>;
+    async fn find_entry(&self, query: &EntryQuery) -> Result<Option<Entry>, SessionError>;
+    async fn find_entries_on_branch(
+        &self,
+        query: &EntryQuery,
+        bounds: &BranchBounds,
+    ) -> Result<Vec<Entry>, SessionError>;
+    async fn find_entry_on_branch(
+        &self,
+        query: &EntryQuery,
+        bounds: &BranchBounds,
+    ) -> Result<Option<Entry>, SessionError>;
     async fn append_message(&self, message: AgentMessage) -> Result<String, SessionError>;
     async fn append_custom_entry(
         &self,

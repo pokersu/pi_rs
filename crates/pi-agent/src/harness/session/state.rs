@@ -5,8 +5,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::harness::session::types::{
-    Entry, EntryOrder, EntryQuery, LanePointer, LaneRecord, LogItem, OperationStartedRecord,
-    RecordQuery, SessionError, SessionStats,
+    Entry, EntryOrder, EntryQuery, ForkOptions, ForkPosition, LanePointer, LaneRecord, LogItem,
+    OperationStartedRecord, RecordQuery, SessionError, SessionStats,
 };
 
 /// 对应 `SessionMutation`
@@ -290,6 +290,89 @@ impl SessionState {
         result
     }
 
+    /// 对应 `findEntriesOnBranch`：从 `start` 沿 parent 链向根扫描。
+    pub fn find_entries_on_branch(
+        &self,
+        query: &EntryQuery,
+        start: &str,
+        stop_at_type: Option<&str>,
+        stop_at_id: Option<&str>,
+    ) -> Result<Vec<Entry>, SessionError> {
+        let mut results: Vec<Entry> = Vec::new();
+        match query.order {
+            Some(EntryOrder::OldestFirst) => {
+                let path = self.walk_to_root(start, None, None)?;
+                for entry in path.iter().rev() {
+                    let reached_bound = stop_at_id.map(|sid| entry.id() == sid).unwrap_or(false)
+                        || stop_at_type
+                            .map(|st| entry_type(entry) == st)
+                            .unwrap_or(false);
+                    if self.matches_entry_query(entry, query) {
+                        results.push(entry.clone());
+                    }
+                    if reached_bound || query.limit.map(|l| results.len() >= l).unwrap_or(false) {
+                        break;
+                    }
+                }
+            }
+            _ => {
+                let path = self.walk_to_root(start, stop_at_type, stop_at_id)?;
+                for entry in &path {
+                    if self.matches_entry_query(entry, query) {
+                        results.push(entry.clone());
+                    }
+                    if query.limit.map(|l| results.len() >= l).unwrap_or(false) {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    /// 对应 `walkToRoot`：从 `start` 沿 parent 链到根（含 `start`，含 stop 边界）。
+    fn walk_to_root(
+        &self,
+        start: &str,
+        stop_at_type: Option<&str>,
+        stop_at_id: Option<&str>,
+    ) -> Result<Vec<Entry>, SessionError> {
+        let mut result = Vec::new();
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut current = self.entries_by_id.get(start).cloned().ok_or_else(|| {
+            SessionError::new(
+                crate::harness::session::types::SessionErrorCode::NotFound,
+                format!("Entry not found: {start}"),
+            )
+        })?;
+        loop {
+            if visited.contains(current.id()) {
+                return Err(SessionError::new(
+                    crate::harness::session::types::SessionErrorCode::InvalidEntry,
+                    format!("Session branch contains a cycle at {}", current.id()),
+                ));
+            }
+            visited.insert(current.id().to_string());
+            let stop = stop_at_id.map(|sid| current.id() == sid).unwrap_or(false)
+                || stop_at_type
+                    .map(|st| entry_type(&current) == st)
+                    .unwrap_or(false);
+            let parent_id = entry_parent_id(&current);
+            result.push(current);
+            if stop || parent_id.is_none() {
+                break;
+            }
+            let parent_id = parent_id.unwrap();
+            current = self.entries_by_id.get(&parent_id).cloned().ok_or_else(|| {
+                SessionError::new(
+                    crate::harness::session::types::SessionErrorCode::InvalidEntry,
+                    format!("Entry not found: {parent_id}"),
+                )
+            })?;
+        }
+        Ok(result)
+    }
+
     /// 对应 `findRecords`
     pub fn find_records(&self, query: &RecordQuery) -> Vec<LaneRecord> {
         let mut result: Vec<LaneRecord> = self
@@ -354,12 +437,130 @@ impl SessionState {
         self.stats.clone()
     }
 
+    /// 对应 `createForkMutations`：复制分支/tree 的 entries、lanes 与 facts。
+    pub fn create_fork_mutations(&self, options: &ForkOptions) -> Vec<SessionMutation> {
+        let (copied_entries, fork_lanes) = match options {
+            ForkOptions::Tree => (
+                self.find_entries(&EntryQuery {
+                    order: Some(EntryOrder::OldestFirst),
+                    ..Default::default()
+                }),
+                self.get_lanes(),
+            ),
+            ForkOptions::Branch { entry_id, position } => {
+                let selected_entry_id = entry_id
+                    .clone()
+                    .or_else(|| self.lanes.get("main").and_then(|leaf| leaf.clone()));
+                let mut target_id: Option<String> = None;
+                if let Some(selected_entry_id) = selected_entry_id {
+                    let entry = self.get_entry(&selected_entry_id);
+                    if entry
+                        .as_ref()
+                        .map(|e| entry_type(e) != "message")
+                        .unwrap_or(true)
+                    {
+                        panic!(
+                            "{}",
+                            SessionError::new(
+                                crate::harness::session::types::SessionErrorCode::InvalidForkTarget,
+                                format!("Fork target is not a message entry: {selected_entry_id}"),
+                            )
+                        );
+                    }
+                    let entry = entry.unwrap();
+                    let position = position.unwrap_or(if entry_id.is_none() {
+                        ForkPosition::At
+                    } else {
+                        ForkPosition::Before
+                    });
+                    target_id = match position {
+                        ForkPosition::At => Some(entry.id().to_string()),
+                        ForkPosition::Before => entry_parent_id(&entry),
+                    };
+                }
+                let copied = match &target_id {
+                    None => Vec::new(),
+                    Some(target) => self
+                        .find_entries_on_branch(
+                            &EntryQuery {
+                                order: Some(EntryOrder::OldestFirst),
+                                ..Default::default()
+                            },
+                            target,
+                            None,
+                            None,
+                        )
+                        .unwrap_or_default(),
+                };
+                (
+                    copied,
+                    vec![LanePointer {
+                        lane: "main".to_string(),
+                        leaf_id: target_id,
+                    }],
+                )
+            }
+        };
+
+        let mut mutations: Vec<SessionMutation> = Vec::new();
+        let mut sequence: u64 = 1;
+        for source_entry in &copied_entries {
+            let mut entry = source_entry.clone();
+            set_entry_seq(&mut entry, sequence);
+            sequence += 1;
+            mutations.push(SessionMutation::Entry { lane: None, entry });
+        }
+        for pointer in fork_lanes {
+            mutations.push(SessionMutation::Lane {
+                seq: sequence,
+                lane: pointer.lane,
+                leaf_id: pointer.leaf_id,
+            });
+            sequence += 1;
+        }
+        if let Some(name) = &self.name {
+            mutations.push(SessionMutation::FactName {
+                seq: sequence,
+                name: Some(name.clone()),
+            });
+            sequence += 1;
+        }
+        for source_entry in &copied_entries {
+            if let Some(label) = self.labels.get(source_entry.id()) {
+                mutations.push(SessionMutation::FactLabel {
+                    seq: sequence,
+                    target_id: source_entry.id().to_string(),
+                    label: Some(label.clone()),
+                });
+                sequence += 1;
+            }
+        }
+        mutations
+    }
+
     fn matches_entry_query(&self, entry: &Entry, query: &EntryQuery) -> bool {
-        query
+        let type_matches = query
             .kind
             .as_ref()
             .map(|k| entry_type(entry) == k.as_str())
-            .unwrap_or(true)
+            .unwrap_or(true);
+        let custom_type_matches = query
+            .custom_type
+            .as_ref()
+            .map(|ct| match entry {
+                Entry::Custom(e) => e.custom_type == *ct,
+                _ => false,
+            })
+            .unwrap_or(true);
+        let cursor_matches = query
+            .cursor
+            .as_ref()
+            .map(|cursor| match query.order {
+                Some(EntryOrder::OldestFirst) => entry_seq(entry) > cursor.after_seq,
+                _ => entry_seq(entry) < cursor.after_seq,
+            })
+            .unwrap_or(true);
+        type_matches && custom_type_matches && cursor_matches
     }
 
     fn matches_record_query(&self, record: &LaneRecord, query: &RecordQuery) -> bool {
@@ -402,6 +603,18 @@ fn entry_parent_id(entry: &Entry) -> Option<String> {
         Entry::Compaction(e) => e.base.parent_id.clone(),
         Entry::BranchSummary(e) => e.base.parent_id.clone(),
         Entry::Custom(e) => e.base.parent_id.clone(),
+    }
+}
+
+fn set_entry_seq(entry: &mut Entry, seq: u64) {
+    match entry {
+        Entry::Message(e) => e.base.seq = seq,
+        Entry::ModelChange(e) => e.base.seq = seq,
+        Entry::ThinkingLevelChange(e) => e.base.seq = seq,
+        Entry::ActiveToolsChange(e) => e.base.seq = seq,
+        Entry::Compaction(e) => e.base.seq = seq,
+        Entry::BranchSummary(e) => e.base.seq = seq,
+        Entry::Custom(e) => e.base.seq = seq,
     }
 }
 

@@ -31,9 +31,11 @@ pub use utils::event_stream::{
     AssistantMessageEventStream, EventStream, create_assistant_message_event_stream,
 };
 pub use utils::json_parse::{parse_json_with_repair, parse_streaming_json, repair_json};
+pub use utils::overflow::{get_overflow_patterns, is_context_overflow, is_recoverable_length};
 pub use utils::retry::{
     RetryCallbacks, RetryPolicy, is_retryable_assistant_error, retry_assistant_call,
 };
 pub use utils::text::{ContentTextInput, content_text};
+pub use utils::typebox_helpers::{StringEnumOptions, string_enum};
 pub use utils::uuid::uuidv7;
 pub use utils::validation::{validate_tool_arguments, validate_tool_call};

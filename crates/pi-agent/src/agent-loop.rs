@@ -398,11 +398,13 @@ async fn stream_assistant_response(
     let mut response = stream_fn(&config.model, &llm_context, Some(&options));
 
     let mut added_partial = false;
+    let mut partial_message: Option<AssistantMessage> = None;
 
     while let Some(event) = response.next().await {
         let event_for_update = event.clone();
         match event {
             AssistantMessageEvent::Start { partial } => {
+                partial_message = Some(partial.clone());
                 context
                     .messages
                     .push(AgentMessage::Assistant(partial.clone()));
@@ -421,14 +423,19 @@ async fn stream_assistant_response(
             | AssistantMessageEvent::ToolCallStart { partial, .. }
             | AssistantMessageEvent::ToolCallDelta { partial, .. }
             | AssistantMessageEvent::ToolCallEnd { partial, .. } => {
-                if let Some(last) = context.messages.last_mut() {
-                    *last = AgentMessage::Assistant(partial.clone());
+                // 对齐原版：只有收到 `start` 后才跟踪 partial；无 `start` 的流
+                // （openai-responses）在此忽略 delta，避免覆盖最后一条真实消息。
+                if partial_message.is_some() {
+                    partial_message = Some(partial.clone());
+                    if let Some(last) = context.messages.last_mut() {
+                        *last = AgentMessage::Assistant(partial.clone());
+                    }
+                    emit(AgentEvent::MessageUpdate {
+                        message: AgentMessage::Assistant(partial),
+                        assistant_message_event: event_for_update,
+                    })
+                    .await;
                 }
-                emit(AgentEvent::MessageUpdate {
-                    message: AgentMessage::Assistant(partial),
-                    assistant_message_event: event_for_update,
-                })
-                .await;
             }
             AssistantMessageEvent::Done { .. } | AssistantMessageEvent::Error { .. } => {
                 let final_message = response.result().await;

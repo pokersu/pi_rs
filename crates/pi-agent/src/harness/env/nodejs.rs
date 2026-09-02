@@ -2,13 +2,14 @@
 //!
 //! 基于 `std::fs` + `std::process` 的 `FileSystem`/`Shell` 实现。
 
+use std::io::Read;
 use std::path::Path;
 
 use pi_ai::AbortSignal;
 
 use crate::harness::types::{
     ExecutionEnv, ExecutionError, ExecutionErrorCode, FileError, FileErrorCode, FileInfo, FileKind,
-    FileSystem, Shell, ShellExecOptions, ShellResult,
+    FileSystem, Shell, ShellChunkCallback, ShellExecOptions, ShellResult,
 };
 
 fn map_io_error(path: &str, error: &std::io::Error) -> FileError {
@@ -327,35 +328,161 @@ impl Shell for NodeExecutionEnv {
         command: &str,
         options: ShellExecOptions,
     ) -> Result<ShellResult, ExecutionError> {
-        let mut cmd = std::process::Command::new("sh");
-        cmd.arg("-c").arg(command);
-        if let Some(cwd) = &options.cwd {
-            cmd.current_dir(cwd);
-        } else {
-            cmd.current_dir(&self.cwd);
-        }
-        if options.inherit_env {
-            // 继承当前环境（默认行为）。
-        }
-        if let Some(env) = &options.env {
-            for (k, v) in env {
-                cmd.env(k, v);
-            }
-        }
-        let output = cmd.output().map_err(|e| {
-            ExecutionError::new(
-                ExecutionErrorCode::SpawnError,
-                format!("Failed to spawn shell: {e}"),
+        let command = command.to_string();
+        let cwd = options.cwd.clone().unwrap_or_else(|| self.cwd.clone());
+        let env = options.env.clone();
+        let inherit_env = options.inherit_env;
+        let timeout = options.timeout;
+        let abort_signal = options.abort_signal.clone();
+        let on_stdout = options.on_stdout;
+        let on_stderr = options.on_stderr;
+
+        tokio::task::spawn_blocking(move || {
+            exec_sync(
+                &command,
+                &cwd,
+                env.as_ref(),
+                inherit_env,
+                timeout,
+                abort_signal.as_ref(),
+                on_stdout,
+                on_stderr,
             )
-        })?;
-        Ok(ShellResult {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            exit_code: output.status.code().unwrap_or(-1),
         })
+        .await
+        .map_err(|e| {
+            ExecutionError::new(
+                ExecutionErrorCode::Unknown,
+                format!("Shell task failed: {e}"),
+            )
+        })?
     }
 
     async fn cleanup(&self) {}
 }
 
 impl ExecutionEnv for NodeExecutionEnv {}
+
+/// 同步执行 shell 命令：spawn + 增量读 stdout/stderr（回调上报）+ timeout/abort。
+#[allow(clippy::too_many_arguments)]
+fn exec_sync(
+    command: &str,
+    cwd: &str,
+    env: Option<&std::collections::BTreeMap<String, String>>,
+    _inherit_env: bool,
+    timeout: Option<f64>,
+    abort_signal: Option<&AbortSignal>,
+    on_stdout: Option<ShellChunkCallback>,
+    on_stderr: Option<ShellChunkCallback>,
+) -> Result<ShellResult, ExecutionError> {
+    let mut cmd = std::process::Command::new("sh");
+    cmd.arg("-c").arg(command);
+    cmd.current_dir(cwd);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    if let Some(env) = env {
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+    }
+
+    let mut child = cmd.spawn().map_err(|e| {
+        ExecutionError::new(
+            ExecutionErrorCode::SpawnError,
+            format!("Failed to spawn shell: {e}"),
+        )
+    })?;
+    let stdout_pipe = child.stdout.take().unwrap();
+    let stderr_pipe = child.stderr.take().unwrap();
+
+    let stdout_handle = std::thread::spawn(move || read_pipe(stdout_pipe, on_stdout));
+    let stderr_handle = std::thread::spawn(move || read_pipe(stderr_pipe, on_stderr));
+
+    let start = std::time::Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| {
+            ExecutionError::new(
+                ExecutionErrorCode::Unknown,
+                format!("Failed to wait for shell: {e}"),
+            )
+        })? {
+            break status;
+        }
+        if abort_signal.map(|s| s.aborted()).unwrap_or(false) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_handle.join();
+            let _ = stderr_handle.join();
+            return Err(ExecutionError::new(
+                ExecutionErrorCode::Aborted,
+                "Command aborted",
+            ));
+        }
+        if let Some(secs) = timeout
+            && start.elapsed().as_secs_f64() > secs
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_handle.join();
+            let _ = stderr_handle.join();
+            return Err(ExecutionError::new(
+                ExecutionErrorCode::Timeout,
+                format!("Command timed out after {secs} seconds"),
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+
+    let stdout = stdout_handle.join().unwrap_or_default();
+    let stderr = stderr_handle.join().unwrap_or_default();
+
+    Ok(ShellResult {
+        stdout,
+        stderr,
+        exit_code: status.code().unwrap_or(-1),
+    })
+}
+
+/// 增量读一个管道，逐 chunk 回调并返回完整内容。
+fn read_pipe<R: Read>(mut pipe: R, on_chunk: Option<ShellChunkCallback>) -> String {
+    let mut all = String::new();
+    let mut buf = [0u8; 8192];
+    while let Ok(n) = pipe.read(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
+        if let Some(callback) = &on_chunk {
+            callback(&chunk);
+        }
+        all.push_str(&chunk);
+    }
+    all
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    use crate::harness::types::Shell;
+
+    #[tokio::test]
+    async fn exec_streams_stdout_chunks() {
+        let env = NodeExecutionEnv::new(".".to_string());
+        let chunks = Arc::new(Mutex::new(Vec::new()));
+        let chunks_clone = chunks.clone();
+        let options = ShellExecOptions {
+            on_stdout: Some(Box::new(move |chunk: &str| {
+                chunks_clone.lock().unwrap().push(chunk.to_string());
+            })),
+            ..Default::default()
+        };
+
+        let result = env.exec("printf 'line1\nline2\n'", options).await.unwrap();
+        assert_eq!(result.stdout, "line1\nline2\n");
+        let chunks = chunks.lock().unwrap();
+        assert!(!chunks.is_empty());
+        assert_eq!(chunks.concat(), "line1\nline2\n");
+    }
+}

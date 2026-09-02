@@ -9,7 +9,7 @@ use crate::harness::session::jsonl::types::{
     JsonlSessionCreateOptions, JsonlSessionListOptions, JsonlSessionMetadata, JsonlV4Header,
 };
 use crate::harness::session::session::Session;
-use crate::harness::session::types::{SessionError, SessionErrorCode};
+use crate::harness::session::types::{ForkOptions, SessionError, SessionErrorCode};
 
 /// 对应 `JsonlSessionRepo`
 pub struct JsonlSessionRepo {
@@ -87,6 +87,40 @@ impl JsonlSessionRepo {
             .remove(&metadata.path, false, true, None)
             .await
             .map_err(|e| SessionError::new(SessionErrorCode::Storage, e.message))
+    }
+
+    /// 对应 `fork`：从 source 复制分支/tree 到新 session。
+    pub async fn fork(
+        &self,
+        source: &JsonlSessionMetadata,
+        options: &ForkOptions,
+        id: Option<&str>,
+    ) -> Result<Session, SessionError> {
+        let source_storage = JsonlSessionStorage::load(self.fs.clone(), &source.path).await?;
+        let id = id.map(|s| s.to_string()).unwrap_or_else(pi_ai::uuidv7);
+        let created_at = pi_ai::utils::uuid::now_ms() as u64;
+        let session_directory = self.session_directory(&source.cwd).await?;
+        self.fs
+            .create_dir(&session_directory, true, None)
+            .await
+            .map_err(|e| SessionError::new(SessionErrorCode::Storage, e.message))?;
+        let path = format!(
+            "{}/{}",
+            session_directory.trim_end_matches('/'),
+            session_file_name(created_at, &id)
+        );
+        let header = JsonlV4Header {
+            kind: "header".to_string(),
+            version: 4,
+            id: id.clone(),
+            created_at,
+            cwd: source.cwd.clone(),
+            parent_session_id: Some(source.base.id.clone()),
+            legacy_parent_session_path: None,
+            metadata: source.metadata.clone(),
+        };
+        let storage = Arc::new(source_storage.fork(&path, &header, options).await?);
+        Ok(Session::new(storage))
     }
 
     async fn session_directory(&self, cwd: &str) -> Result<String, SessionError> {

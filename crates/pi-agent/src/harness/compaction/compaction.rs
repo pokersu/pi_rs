@@ -32,15 +32,18 @@ pub struct CompactionSettings {
 /// 对应 `DEFAULT_COMPACTION_SETTINGS`
 pub const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = CompactionSettings {
     enabled: true,
-    reserve_tokens: 8192,
-    keep_recent_tokens: 32768,
+    reserve_tokens: 16384,
+    keep_recent_tokens: 20000,
 };
 
-/// 对应 `calculateContextTokens`
+/// 对应 `calculateContextTokens`：优先使用 provider 报告的 totalTokens，
+/// 缺失（0）时回退为各部分之和。
 pub fn calculate_context_tokens(usage: &Usage) -> u64 {
-    usage
-        .total_tokens
-        .max(usage.input + usage.output + usage.cache_read + usage.cache_write)
+    if usage.total_tokens > 0 {
+        usage.total_tokens
+    } else {
+        usage.input + usage.output + usage.cache_read + usage.cache_write
+    }
 }
 
 fn get_assistant_usage(msg: &AgentMessage) -> Option<Usage> {

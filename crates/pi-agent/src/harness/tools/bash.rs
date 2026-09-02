@@ -1,15 +1,18 @@
-//! Rust 翻译自 packages/agent/src/harness/tools/bash.ts（简化：无流式 onUpdate）
+//! Rust 翻译自 packages/agent/src/harness/tools/bash.ts（含流式 onUpdate + 100ms 节流）
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use pi_ai::{AbortSignal, TextContent, TextKind, TextOrImageContent};
+use pi_ai::{TextContent, TextKind, TextOrImageContent};
 
 use crate::harness::result::get_or_throw;
-use crate::harness::types::{ExecutionEnv, ShellExecOptions};
+use crate::harness::types::{ExecutionEnv, ShellChunkCallback, ShellExecOptions};
 use crate::types::{AgentTool, AgentToolResult};
 
 const DEFAULT_MAX_LINES: usize = 2000;
 const DEFAULT_MAX_BYTES: usize = 50 * 1024;
+/// 对应 `BASH_UPDATE_THROTTLE_MS`
+const BASH_UPDATE_THROTTLE_MS: u64 = 100;
 
 /// 对应 `createBashTool`
 pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
@@ -31,7 +34,7 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
             }),
             constrained_sampling: None,
         },
-        execute: Arc::new(move |_id, params, signal, _on_update| {
+        execute: Arc::new(move |_id, params, signal, on_update| {
             let env = env.clone();
             Box::pin(async move {
                 let command = params
@@ -46,6 +49,38 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
                     panic!("Invalid timeout: must be a finite number of seconds");
                 }
 
+                // 进度 channel：读线程 -> 节流上报 task。
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+                let progress_handle = on_update.map(|callback| {
+                    tokio::spawn(async move {
+                        let mut rx = rx;
+                        let mut accumulated = String::new();
+                        let mut last = Instant::now();
+                        callback(empty_update());
+                        while let Some(chunk) = rx.recv().await {
+                            accumulated.push_str(&chunk);
+                            if last.elapsed() >= Duration::from_millis(BASH_UPDATE_THROTTLE_MS) {
+                                last = Instant::now();
+                                callback(text_update(&accumulated));
+                            }
+                        }
+                    })
+                });
+
+                let on_stdout: ShellChunkCallback = {
+                    let tx = tx.clone();
+                    Box::new(move |chunk: &str| {
+                        let _ = tx.send(chunk.to_string());
+                    })
+                };
+                let on_stderr: ShellChunkCallback = {
+                    let tx = tx.clone();
+                    Box::new(move |chunk: &str| {
+                        let _ = tx.send(chunk.to_string());
+                    })
+                };
+
                 let result = get_or_throw(
                     env.exec(
                         &command,
@@ -53,11 +88,19 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
                             cwd: Some(env.cwd().to_string()),
                             timeout,
                             abort_signal: signal,
+                            on_stdout: Some(on_stdout),
+                            on_stderr: Some(on_stderr),
                             ..Default::default()
                         },
                     )
                     .await,
                 );
+
+                // 关闭 channel，等节流 task 结束。
+                drop(tx);
+                if let Some(handle) = progress_handle {
+                    let _ = handle.await;
+                }
 
                 if result.exit_code != 0 {
                     panic!(
@@ -77,7 +120,7 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
                     output = "(no output)".to_string();
                 }
 
-                // 截断到行数限制。
+                // 截断到行数/字节限制。
                 let lines: Vec<&str> = output.lines().collect();
                 if lines.len() > DEFAULT_MAX_LINES {
                     let start = lines.len() - DEFAULT_MAX_LINES;
@@ -109,6 +152,26 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
     }
 }
 
-// `AbortSignal` 在签名中作为参数类型出现，此引用避免未使用告警。
-#[allow(unused)]
-fn _unused_signal(_: Option<AbortSignal>) {}
+fn empty_update() -> AgentToolResult {
+    AgentToolResult {
+        content: Vec::new(),
+        details: serde_json::Value::Null,
+        usage: None,
+        added_tool_names: None,
+        terminate: false,
+    }
+}
+
+fn text_update(text: &str) -> AgentToolResult {
+    AgentToolResult {
+        content: vec![TextOrImageContent::Text(TextContent {
+            kind: TextKind,
+            text: text.to_string(),
+            text_signature: None,
+        })],
+        details: serde_json::Value::Null,
+        usage: None,
+        added_tool_names: None,
+        terminate: false,
+    }
+}

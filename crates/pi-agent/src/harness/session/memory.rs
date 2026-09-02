@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use crate::harness::session::session::Session;
 use crate::harness::session::state::SessionState;
 use crate::harness::session::types::{
-    Entry, EntryQuery, LanePointer, LaneRecord, LogItem, OperationStartedRecord, RecordQuery,
-    SessionError, SessionErrorCode, SessionMetadata, SessionStats, SessionStorage,
+    Entry, EntryQuery, ForkOptions, LanePointer, LaneRecord, LogItem, OperationStartedRecord,
+    RecordQuery, SessionError, SessionErrorCode, SessionMetadata, SessionStats, SessionStorage,
 };
 
 /// 对应 `InMemorySessionStorage`
@@ -22,6 +22,16 @@ impl InMemorySessionStorage {
             metadata,
             state: Mutex::new(SessionState::new()),
         }
+    }
+
+    /// 对应 `fork`：复制 source 的 fork mutations 到新 storage。
+    pub fn fork(&self, metadata: SessionMetadata, options: &ForkOptions) -> Self {
+        let storage = Self::new(metadata);
+        let mutations = self.state.lock().unwrap().create_fork_mutations(options);
+        for mutation in mutations {
+            storage.state.lock().unwrap().apply_mutation(mutation);
+        }
+        storage
     }
 }
 
@@ -91,6 +101,19 @@ impl SessionStorage for InMemorySessionStorage {
 
     async fn find_entries(&self, query: &EntryQuery) -> Result<Vec<Entry>, SessionError> {
         Ok(self.state.lock().unwrap().find_entries(query))
+    }
+
+    async fn find_entries_on_branch(
+        &self,
+        query: &EntryQuery,
+        start: &str,
+        stop_at_type: Option<&str>,
+        stop_at_id: Option<&str>,
+    ) -> Result<Vec<Entry>, SessionError> {
+        self.state
+            .lock()
+            .unwrap()
+            .find_entries_on_branch(query, start, stop_at_type, stop_at_id)
     }
 
     async fn find_records(&self, query: &RecordQuery) -> Result<Vec<LaneRecord>, SessionError> {
@@ -300,5 +323,41 @@ impl InMemorySessionRepo {
     pub async fn delete(&self, metadata: SessionMetadata) -> Result<(), SessionError> {
         self.sessions.lock().unwrap().remove(&metadata.id);
         Ok(())
+    }
+
+    /// 对应 `fork`：从 source 复制分支/tree 到新 session。
+    pub async fn fork(
+        &self,
+        source: &SessionMetadata,
+        options: &ForkOptions,
+        id: Option<&str>,
+    ) -> Result<Session, SessionError> {
+        let source_storage = {
+            let sessions = self.sessions.lock().unwrap();
+            sessions.get(&source.id).cloned().ok_or_else(|| {
+                SessionError::new(
+                    SessionErrorCode::NotFound,
+                    format!("Session not found: {}", source.id),
+                )
+            })?
+        };
+        let id = id.map(|s| s.to_string()).unwrap_or_else(pi_ai::uuidv7);
+        let mut sessions = self.sessions.lock().unwrap();
+        if sessions.contains_key(&id) {
+            return Err(SessionError::new(
+                SessionErrorCode::AlreadyExists,
+                format!("Session already exists: {id}"),
+            ));
+        }
+        let storage = Arc::new(source_storage.fork(
+            SessionMetadata {
+                id: id.clone(),
+                created_at: pi_ai::utils::uuid::now_ms() as u64,
+                parent_session_id: Some(source.id.clone()),
+            },
+            options,
+        ));
+        sessions.insert(id, storage.clone());
+        Ok(Session::new(storage))
     }
 }

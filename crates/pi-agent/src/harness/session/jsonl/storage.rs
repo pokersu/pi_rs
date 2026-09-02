@@ -7,10 +7,11 @@ use std::sync::{Arc, Mutex};
 use crate::harness::session::jsonl::codec::{
     decode_entry, decode_record, encode_entry, encode_record,
 };
+use crate::harness::session::jsonl::types::JsonlV4Header;
 use crate::harness::session::state::{SessionMutation, SessionState};
 use crate::harness::session::types::{
-    Entry, EntryQuery, LanePointer, LaneRecord, LogItem, OperationStartedRecord, RecordQuery,
-    SessionError, SessionMetadata, SessionStats, SessionStorage,
+    Entry, EntryQuery, ForkOptions, LanePointer, LaneRecord, LogItem, OperationStartedRecord,
+    RecordQuery, SessionError, SessionErrorCode, SessionMetadata, SessionStats, SessionStorage,
 };
 
 /// 对应 `JsonlSessionStorage`
@@ -77,6 +78,42 @@ impl JsonlSessionStorage {
                 let mut state = storage.state.lock().unwrap();
                 state.apply_mutation(SessionMutation::Record { record });
             }
+        }
+        Ok(storage)
+    }
+
+    /// 对应 `fork`：复制 source 的 fork mutations 到新文件。
+    pub async fn fork(
+        &self,
+        path: &str,
+        header: &JsonlV4Header,
+        options: &ForkOptions,
+    ) -> Result<Self, SessionError> {
+        let header_line = serde_json::to_string(header).map_err(|e| {
+            SessionError::new(
+                crate::harness::session::types::SessionErrorCode::InvalidEntry,
+                e.to_string(),
+            )
+        })?;
+        self.fs
+            .write_file(path, format!("{header_line}\n").as_bytes(), None)
+            .await
+            .map_err(|e| SessionError::new(SessionErrorCode::Storage, e.message))?;
+
+        let storage = Self {
+            fs: self.fs.clone(),
+            path: path.to_string(),
+            metadata: SessionMetadata {
+                id: header.id.clone(),
+                created_at: header.created_at,
+                parent_session_id: header.parent_session_id.clone(),
+            },
+            state: Mutex::new(SessionState::new()),
+        };
+        let mutations = self.state.lock().unwrap().create_fork_mutations(options);
+        for mutation in mutations {
+            storage.append_mutation(&mutation).await?;
+            storage.state.lock().unwrap().apply_mutation(mutation);
         }
         Ok(storage)
     }
@@ -175,6 +212,19 @@ impl SessionStorage for JsonlSessionStorage {
 
     async fn find_entries(&self, query: &EntryQuery) -> Result<Vec<Entry>, SessionError> {
         Ok(self.state.lock().unwrap().find_entries(query))
+    }
+
+    async fn find_entries_on_branch(
+        &self,
+        query: &EntryQuery,
+        start: &str,
+        stop_at_type: Option<&str>,
+        stop_at_id: Option<&str>,
+    ) -> Result<Vec<Entry>, SessionError> {
+        self.state
+            .lock()
+            .unwrap()
+            .find_entries_on_branch(query, start, stop_at_type, stop_at_id)
     }
 
     async fn find_records(&self, query: &RecordQuery) -> Result<Vec<LaneRecord>, SessionError> {

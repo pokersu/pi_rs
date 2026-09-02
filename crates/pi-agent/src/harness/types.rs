@@ -119,6 +119,37 @@ impl std::fmt::Display for CompactionError {
 
 impl std::error::Error for CompactionError {}
 
+/// 对应 `BranchSummaryErrorCode`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchSummaryErrorCode {
+    Aborted,
+    SummarizationFailed,
+}
+
+/// 对应 `BranchSummaryError`
+#[derive(Debug, Clone)]
+pub struct BranchSummaryError {
+    pub code: BranchSummaryErrorCode,
+    pub message: String,
+}
+
+impl BranchSummaryError {
+    pub fn new(code: BranchSummaryErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for BranchSummaryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for BranchSummaryError {}
+
 /// 对应 `FileInfo`
 #[derive(Debug, Clone)]
 pub struct FileInfo {
@@ -221,13 +252,49 @@ pub trait FileSystem: Send + Sync {
 }
 
 /// 对应 `ShellExecOptions`
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub struct ShellExecOptions {
     pub cwd: Option<String>,
     pub env: Option<BTreeMap<String, String>>,
     pub inherit_env: bool,
     pub timeout: Option<f64>,
     pub abort_signal: Option<AbortSignal>,
+    /// stdout 产出时回调（流式进度）。
+    pub on_stdout: Option<ShellChunkCallback>,
+    /// stderr 产出时回调（流式进度）。
+    pub on_stderr: Option<ShellChunkCallback>,
+}
+
+/// 对应 `onStdout` / `onStderr`：每次产出 chunk 时同步回调。
+pub type ShellChunkCallback = Box<dyn Fn(&str) + Send + Sync>;
+
+impl Clone for ShellExecOptions {
+    fn clone(&self) -> Self {
+        Self {
+            cwd: self.cwd.clone(),
+            env: self.env.clone(),
+            inherit_env: self.inherit_env,
+            timeout: self.timeout,
+            abort_signal: self.abort_signal.clone(),
+            // 回调是一次性消费，clone 时不可复制。
+            on_stdout: None,
+            on_stderr: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for ShellExecOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShellExecOptions")
+            .field("cwd", &self.cwd)
+            .field("env", &self.env)
+            .field("inherit_env", &self.inherit_env)
+            .field("timeout", &self.timeout)
+            .field("abort_signal", &self.abort_signal)
+            .field("on_stdout", &self.on_stdout.is_some())
+            .field("on_stderr", &self.on_stderr.is_some())
+            .finish()
+    }
 }
 
 /// 对应 `Shell.exec` 的返回值
