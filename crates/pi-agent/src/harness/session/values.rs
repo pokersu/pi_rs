@@ -254,6 +254,26 @@ pub fn operation_tool_memo(operation_id: &str, invocation_id: &str, name: &str) 
     )
 }
 
+/// 对应 `operationToolArgsPrefix`。
+pub fn operation_tool_args_prefix(operation_id: &str) -> Value<Json> {
+    value("pi.op.tool_args", &format!("{operation_id}:"))
+}
+
+/// 对应 `operationToolMemoPrefix`。
+pub fn operation_tool_memo_prefix(operation_id: &str) -> Value<Json> {
+    value("pi.op.tool_memo", &format!("{operation_id}:"))
+}
+
+/// 对应 `operationPreparationPrefix`。
+pub fn operation_preparation_prefix(operation_id: &str) -> Value<Json> {
+    value("pi.op.preparation", &format!("{operation_id}:"))
+}
+
+/// 对应 `pendingToolOutputPrefix`。
+pub fn pending_tool_output_prefix(operation_id: &str) -> Value<Json> {
+    value("pi.pending.tool_output", &format!("{operation_id}:"))
+}
+
 /// 对应 `pendingEntry`。
 pub fn pending_entry(entry_id: &str) -> Value<Json> {
     value("pi.pending.entry", entry_id)
