@@ -2,6 +2,8 @@
 
 #[path = "adaptive-publisher.rs"]
 pub mod adaptive_publisher;
+#[path = "output-capture.rs"]
+pub mod output_capture;
 #[path = "shell-output.rs"]
 pub mod shell_output;
 pub mod truncate;
