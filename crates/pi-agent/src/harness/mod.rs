@@ -3,9 +3,11 @@
 #[path = "agent-harness.rs"]
 pub mod agent_harness;
 pub mod compaction;
+pub mod config;
 pub mod context;
 pub mod env;
 pub mod events;
+pub mod execution;
 pub mod messages;
 #[path = "prompt-templates.rs"]
 pub mod prompt_templates;
