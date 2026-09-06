@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use pi_ai::{AbortSignal, Tool};
+use pi_ai::{AbortSignal, CacheRetention, Tool, Transport};
 
 use crate::harness::context::Context;
 use crate::types::AgentToolResult;
@@ -476,3 +476,31 @@ pub type AgentHarnessToolExecuteFn = Arc<
         + Send
         + Sync,
 >;
+
+/// 对应 `AgentHarnessStreamOptions`。
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentHarnessStreamOptions {
+    pub transport: Option<Transport>,
+    pub timeout_ms: Option<u64>,
+    pub max_retries: Option<u64>,
+    pub max_retry_delay_ms: Option<u64>,
+    pub headers: Option<BTreeMap<String, String>>,
+    pub metadata: Option<serde_json::Value>,
+    pub cache_retention: Option<CacheRetention>,
+    /// `bool | { window?: "15m" | "1h" | "24h" }`。
+    pub deferred: Option<serde_json::Value>,
+}
+
+/// 对应 `AgentHarnessStreamOptionsPatch`。
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentHarnessStreamOptionsPatch {
+    pub transport: Option<Transport>,
+    pub timeout_ms: Option<u64>,
+    pub max_retries: Option<u64>,
+    pub max_retry_delay_ms: Option<u64>,
+    pub metadata: Option<serde_json::Value>,
+    pub cache_retention: Option<CacheRetention>,
+    pub deferred: Option<serde_json::Value>,
+}

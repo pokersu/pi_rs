@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
-use crate::harness::session::types::SessionStorage;
+use crate::harness::session::types::Storage;
 
 /// 对应 `SessionBackendFixture`
 pub trait SessionBackendFixture: Send + Sync {
-    fn storage(&self) -> Arc<dyn SessionStorage>;
+    fn storage(&self) -> Arc<dyn Storage>;
 }
 
 /// 对应 `SessionBackendFixtureFactory`

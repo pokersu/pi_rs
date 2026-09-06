@@ -17,11 +17,11 @@ use crate::harness::compaction::utils::{
     FileOperations, compute_file_lists, create_file_ops, extract_file_ops_from_message,
     format_file_operations, serialize_conversation,
 };
+use crate::harness::context::Context as HarnessContext;
 use crate::harness::messages::{
     convert_to_llm, create_branch_summary_message, create_compaction_summary_message,
 };
-use crate::harness::session::Session;
-use crate::harness::session::types::{Entry, SessionError, SessionErrorCode, SessionTree};
+use crate::harness::session::types::{Entry, Session};
 use crate::harness::types::{BranchSummaryError, BranchSummaryErrorCode};
 use crate::types::AgentMessage;
 
@@ -72,10 +72,11 @@ pub struct GenerateBranchSummaryOptions<'a> {
 
 /// 对应 `collectEntriesForBranchSummary`：收集导航到另一 session tree entry 前应摘要的 entries。
 pub async fn collect_entries_for_branch_summary(
-    session: &Session,
+    session: &dyn Session,
     old_leaf_id: Option<&str>,
     target_id: &str,
-) -> Result<CollectEntriesResult, SessionError> {
+    context: &HarnessContext,
+) -> Result<CollectEntriesResult, String> {
     let Some(old_leaf_id) = old_leaf_id else {
         return Ok(CollectEntriesResult {
             entries: Vec::new(),
@@ -83,9 +84,9 @@ pub async fn collect_entries_for_branch_summary(
         });
     };
 
-    let old_path = path_to_root(session, old_leaf_id).await?;
+    let old_path = path_to_root(session, old_leaf_id, context).await?;
     let old_ids: HashSet<String> = old_path.iter().map(|e| e.id().to_string()).collect();
-    let target_path = path_to_root(session, target_id).await?;
+    let target_path = path_to_root(session, target_id, context).await?;
 
     let mut common_ancestor_id: Option<String> = None;
     for entry in &target_path {
@@ -101,12 +102,10 @@ pub async fn collect_entries_for_branch_summary(
         if Some(&id) == common_ancestor_id.as_ref() {
             break;
         }
-        let entry = session.get_entry(&id).await?.ok_or_else(|| {
-            SessionError::new(
-                SessionErrorCode::InvalidEntry,
-                format!("Entry {id} not found"),
-            )
-        })?;
+        let entry = session
+            .get_entry(&id, context)
+            .await?
+            .ok_or_else(|| format!("Entry {id} not found"))?;
         current = entry_parent_id(&entry);
         entries.push(entry);
     }
@@ -119,11 +118,15 @@ pub async fn collect_entries_for_branch_summary(
 }
 
 /// 从 `start_id` 沿 parent_id 回溯到 root，返回路径（start → root 顺序）。
-async fn path_to_root(session: &Session, start_id: &str) -> Result<Vec<Entry>, SessionError> {
+async fn path_to_root(
+    session: &dyn Session,
+    start_id: &str,
+    context: &HarnessContext,
+) -> Result<Vec<Entry>, String> {
     let mut path = Vec::new();
     let mut current = Some(start_id.to_string());
     while let Some(id) = current {
-        let Some(entry) = session.get_entry(&id).await? else {
+        let Some(entry) = session.get_entry(&id, context).await? else {
             break;
         };
         current = entry_parent_id(&entry);
@@ -133,15 +136,7 @@ async fn path_to_root(session: &Session, start_id: &str) -> Result<Vec<Entry>, S
 }
 
 fn entry_parent_id(entry: &Entry) -> Option<String> {
-    match entry {
-        Entry::Message(e) => e.base.parent_id.clone(),
-        Entry::ModelChange(e) => e.base.parent_id.clone(),
-        Entry::ThinkingLevelChange(e) => e.base.parent_id.clone(),
-        Entry::ActiveToolsChange(e) => e.base.parent_id.clone(),
-        Entry::Compaction(e) => e.base.parent_id.clone(),
-        Entry::BranchSummary(e) => e.base.parent_id.clone(),
-        Entry::Custom(e) => e.base.parent_id.clone(),
-    }
+    entry.parent_id().map(String::from)
 }
 
 /// 对应 `getMessageFromEntry`
@@ -327,46 +322,4 @@ pub async fn generate_branch_summary(
         read_files,
         modified_files,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::harness::session::InMemorySessionRepo;
-    use crate::harness::session::types::SessionTree;
-
-    fn user_msg(text: &str) -> AgentMessage {
-        AgentMessage::User(pi_ai::UserMessage {
-            content: pi_ai::UserContent::Text(text.to_string()),
-            timestamp: 0,
-        })
-    }
-
-    #[tokio::test]
-    async fn collects_entries_between_old_leaf_and_target() {
-        let repo = InMemorySessionRepo::new();
-        let session = repo.create(None).await.unwrap();
-        let id1 = session.append_message(user_msg("a")).await.unwrap();
-        let id2 = session.append_message(user_msg("b")).await.unwrap();
-        let id3 = session.append_message(user_msg("c")).await.unwrap();
-
-        let result = collect_entries_for_branch_summary(&session, Some(&id3), &id1)
-            .await
-            .unwrap();
-        assert_eq!(result.common_ancestor_id.as_deref(), Some(id1.as_str()));
-        assert_eq!(result.entries.len(), 2);
-        assert_eq!(result.entries[0].id(), id2);
-        assert_eq!(result.entries[1].id(), id3);
-    }
-
-    #[tokio::test]
-    async fn collects_nothing_when_no_old_leaf() {
-        let repo = InMemorySessionRepo::new();
-        let session = repo.create(None).await.unwrap();
-        let result = collect_entries_for_branch_summary(&session, None, "x")
-            .await
-            .unwrap();
-        assert!(result.entries.is_empty());
-        assert!(result.common_ancestor_id.is_none());
-    }
 }

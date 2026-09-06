@@ -1,354 +1,336 @@
-//! Rust 翻译自 packages/agent/src/harness/session/jsonl/storage.ts（核心）
+//! Rust 翻译自 packages/agent/src/harness/session/jsonl/storage.ts（v4 核心，legacy-v3 迁移简化）
 //!
-//! JSONL 文件存储：`SessionState` + 逐行追加 mutation 到 `.jsonl` 文件。
+//! 基于 InMemoryStorageState 的 JSONL 文件 Storage。
 
-use std::sync::{Arc, Mutex};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex as StdMutex};
 
-use crate::harness::session::jsonl::codec::{
-    decode_entry, decode_record, encode_entry, encode_record,
-};
-use crate::harness::session::jsonl::types::JsonlV4Header;
-use crate::harness::session::state::{SessionMutation, SessionState};
+use serde_json::Value as Json;
+use tokio::sync::Mutex;
+
+use crate::harness::context::Context;
+use crate::harness::session::commit::CommittedWrite;
+use crate::harness::session::in_memory_storage_state::InMemoryStorageState;
+use crate::harness::session::jsonl::codec::parse_jsonl_session_header;
+use crate::harness::session::jsonl::types::{JSONL_STORAGE_VERSION, JsonlStorageHeader};
 use crate::harness::session::types::{
-    Entry, EntryQuery, ForkOptions, LanePointer, LaneRecord, LogItem, OperationStartedRecord,
-    RecordQuery, SessionError, SessionErrorCode, SessionMetadata, SessionStats, SessionStorage,
+    CommitResult, Entry, EntryScan, EntryStructure, SessionStats, Storage, StorageBranchScan,
+    UsageRow, UsageScan, Write,
 };
+use crate::harness::session::values::{
+    ListElement, ListReadOptions, StoredValue, Value, ValueList,
+};
+use crate::harness::types::FileSystem;
 
-/// 对应 `JsonlSessionStorage`
-pub struct JsonlSessionStorage {
-    fs: Arc<dyn crate::harness::types::FileSystem>,
-    path: String,
-    metadata: SessionMetadata,
-    state: Mutex<SessionState>,
+struct JsonlInner {
+    storage_state: InMemoryStorageState,
+    state: StorageState,
 }
 
-impl JsonlSessionStorage {
-    /// 对应 `load`
-    pub async fn load(
-        fs: Arc<dyn crate::harness::types::FileSystem>,
-        path: &str,
-    ) -> Result<Self, SessionError> {
-        let content = fs.read_text_file(path, None).await.map_err(|e| {
-            SessionError::new(
-                crate::harness::session::types::SessionErrorCode::Storage,
-                e.message,
-            )
-        })?;
-        let physical_lines: Vec<&str> = content.split('\n').collect();
-        // 第一行是 header。
-        let header: crate::harness::session::jsonl::types::JsonlV4Header =
-            if let Some(first) = physical_lines.first() {
-                serde_json::from_str(first).map_err(|e| {
-                    SessionError::new(
-                        crate::harness::session::types::SessionErrorCode::InvalidEntry,
-                        e.to_string(),
-                    )
-                })?
-            } else {
-                return Err(SessionError::new(
-                    crate::harness::session::types::SessionErrorCode::InvalidEntry,
-                    "missing header",
-                ));
-            };
-        let metadata = SessionMetadata {
-            id: header.id.clone(),
-            created_at: header.created_at,
-            parent_session_id: header.parent_session_id.clone(),
-        };
-        let storage = Self {
-            fs,
-            path: path.to_string(),
-            metadata,
-            state: Mutex::new(SessionState::new()),
-        };
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StorageState {
+    Open,
+    Closed,
+}
 
-        for line in physical_lines.iter().skip(1) {
-            if line.trim().is_empty() {
-                continue;
-            }
-            if let Ok(entry) = decode_entry(line) {
-                let mut state = storage.state.lock().unwrap();
-                let seq = state.next_sequence();
-                state.apply_mutation(SessionMutation::Entry {
-                    lane: Some("main".to_string()),
-                    entry,
-                });
-                let _ = seq;
-            } else if let Ok(record) = decode_record(line) {
-                let mut state = storage.state.lock().unwrap();
-                state.apply_mutation(SessionMutation::Record { record });
-            }
-        }
-        Ok(storage)
+/// 对应 `JsonlStorageOptions`。
+pub struct JsonlStorageOptions {
+    pub file_system: Arc<dyn FileSystem>,
+    pub path: String,
+}
+
+fn serialize_storage(header: &JsonlStorageHeader, transactions: &[Vec<CommittedWrite>]) -> String {
+    let mut lines = vec![serde_json::to_string(header).unwrap_or_else(|_| "{}".to_string())];
+    for transaction in transactions {
+        let value: Json = match transaction.len() {
+            0 => Json::Null,
+            1 => serde_json::to_value(&transaction[0]).unwrap_or(Json::Null),
+            _ => serde_json::to_value(transaction).unwrap_or(Json::Null),
+        };
+        lines.push(serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string()));
     }
+    format!("{}\n", lines.join("\n"))
+}
 
-    /// 对应 `fork`：复制 source 的 fork mutations 到新文件。
-    pub async fn fork(
-        &self,
-        path: &str,
-        header: &JsonlV4Header,
-        options: &ForkOptions,
-    ) -> Result<Self, SessionError> {
-        let header_line = serde_json::to_string(header).map_err(|e| {
-            SessionError::new(
-                crate::harness::session::types::SessionErrorCode::InvalidEntry,
-                e.to_string(),
-            )
-        })?;
-        self.fs
-            .write_file(path, format!("{header_line}\n").as_bytes(), None)
-            .await
-            .map_err(|e| SessionError::new(SessionErrorCode::Storage, e.message))?;
-
-        let storage = Self {
-            fs: self.fs.clone(),
-            path: path.to_string(),
-            metadata: SessionMetadata {
-                id: header.id.clone(),
-                created_at: header.created_at,
-                parent_session_id: header.parent_session_id.clone(),
-            },
-            state: Mutex::new(SessionState::new()),
-        };
-        let mutations = self.state.lock().unwrap().create_fork_mutations(options);
-        for mutation in mutations {
-            storage.append_mutation(&mutation).await?;
-            storage.state.lock().unwrap().apply_mutation(mutation);
-        }
-        Ok(storage)
+fn parse_transaction(line: &str) -> Result<Vec<CommittedWrite>, String> {
+    let value: Json = serde_json::from_str(line).map_err(|e| e.to_string())?;
+    if value.is_array() {
+        serde_json::from_value(value).map_err(|e| e.to_string())
+    } else {
+        let write: CommittedWrite = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        Ok(vec![write])
     }
+}
 
-    async fn append_mutation(&self, mutation: &SessionMutation) -> Result<(), SessionError> {
-        let line = match mutation {
-            SessionMutation::Entry { entry, .. } => encode_entry(entry),
-            SessionMutation::Record { record } => encode_record(record),
-            _ => return Ok(()),
+fn split_complete_lines(content: &str) -> (Vec<String>, bool) {
+    if content.ends_with('\n') {
+        let body = content.strip_suffix('\n').unwrap_or(content);
+        return (body.split('\n').map(String::from).collect(), false);
+    }
+    match content.rfind('\n') {
+        None => (Vec::new(), true),
+        Some(last) => (
+            content[..last].split('\n').map(String::from).collect(),
+            true,
+        ),
+    }
+}
+
+/// 对应 `JsonlStorage`。
+pub struct JsonlStorage {
+    options: JsonlStorageOptions,
+    #[allow(dead_code)]
+    header: JsonlStorageHeader,
+    inner: Arc<Mutex<JsonlInner>>,
+}
+
+impl JsonlStorage {
+    pub async fn create(
+        options: JsonlStorageOptions,
+        header: JsonlStorageHeader,
+        initial_writes: Vec<Write>,
+        context: &Context,
+    ) -> Result<Self, String> {
+        let mut storage_state = InMemoryStorageState::new();
+        let timestamp = header.created_at;
+        let prepared = storage_state.prepare_commit(&initial_writes, timestamp);
+        let transactions = if prepared.writes.is_empty() {
+            Vec::new()
+        } else {
+            vec![prepared.writes.clone()]
         };
-        let content = format!("{line}\n");
-        self.fs
-            .append_file(&self.path, content.as_bytes(), None)
+        let content = serialize_storage(&header, &transactions);
+        options
+            .file_system
+            .write_file(&options.path, content.as_bytes(), context.abort_signal())
             .await
             .map_err(|e| {
-                SessionError::new(
-                    crate::harness::session::types::SessionErrorCode::Storage,
-                    e.message,
+                format!(
+                    "Failed to write JSONL storage {}: {}",
+                    options.path, e.message
                 )
             })?;
+        storage_state.apply_validated(&prepared.writes);
+        Ok(Self {
+            options,
+            header,
+            inner: Arc::new(Mutex::new(JsonlInner {
+                storage_state,
+                state: StorageState::Open,
+            })),
+        })
+    }
+
+    pub async fn open(options: JsonlStorageOptions, context: &Context) -> Result<Self, String> {
+        let content = options
+            .file_system
+            .read_text_file(&options.path, context.abort_signal())
+            .await
+            .map_err(|e| {
+                format!(
+                    "Failed to read JSONL storage {}: {}",
+                    options.path, e.message
+                )
+            })?;
+        let (lines, torn) = split_complete_lines(&content);
+        if lines.first().map(|s| s.as_str()).unwrap_or("").is_empty() {
+            return Err(format!(
+                "Invalid JSONL storage {}: missing header",
+                options.path
+            ));
+        }
+        let parsed = parse_jsonl_session_header(&lines[0])?;
+        let header = match parsed {
+            crate::harness::session::jsonl::codec::JsonlParsedSessionHeader::V4 { header } => {
+                header
+            }
+            crate::harness::session::jsonl::codec::JsonlParsedSessionHeader::V3Legacy {
+                ..
+            } => {
+                return Err("Legacy v3 JSONL migration is not yet implemented".to_string());
+            }
+        };
+        if header.storage_version != JSONL_STORAGE_VERSION {
+            return Err(format!(
+                "Session {} uses unsupported storage version {}",
+                header.id, header.storage_version
+            ));
+        }
+        let mut storage_state = InMemoryStorageState::new();
+        for (index, line) in lines.iter().enumerate().skip(1) {
+            let writes = parse_transaction(line).map_err(|e| {
+                format!(
+                    "Invalid JSONL storage {}: line {} {e}",
+                    options.path,
+                    index + 1
+                )
+            })?;
+            storage_state.validate_committed(&writes).map_err(|e| {
+                format!(
+                    "Invalid JSONL storage {}: line {} {e}",
+                    options.path,
+                    index + 1
+                )
+            })?;
+            storage_state.apply_validated(&writes);
+        }
+        if let Some(next_seq) = header.next_seq {
+            storage_state.advance_next_seq(next_seq);
+        }
+        if torn {
+            let _ = options
+                .file_system
+                .write_file(
+                    &options.path,
+                    format!("{}\n", lines.join("\n")).as_bytes(),
+                    context.abort_signal(),
+                )
+                .await;
+        }
+        Ok(Self {
+            options,
+            header,
+            inner: Arc::new(Mutex::new(JsonlInner {
+                storage_state,
+                state: StorageState::Open,
+            })),
+        })
+    }
+
+    fn assert_open(&self, inner: &JsonlInner) -> Result<(), String> {
+        if inner.state != StorageState::Open {
+            return Err("JsonlStorage is closed".to_string());
+        }
         Ok(())
     }
 }
 
 #[async_trait::async_trait]
-impl SessionStorage for JsonlSessionStorage {
-    async fn get_metadata(&self) -> Result<SessionMetadata, SessionError> {
-        Ok(self.metadata.clone())
+impl Storage for JsonlStorage {
+    async fn commit(&self, writes: Vec<Write>, context: &Context) -> Result<CommitResult, String> {
+        let mut inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        let timestamp = pi_ai::utils::uuid::now_ms() as u64;
+        let prepared = inner.storage_state.prepare_commit(&writes, timestamp);
+        if !prepared.writes.is_empty() {
+            let line = serde_json::to_string(&prepared.writes).map_err(|e| e.to_string())?;
+            self.options
+                .file_system
+                .append_file(
+                    &self.options.path,
+                    format!("{line}\n").as_bytes(),
+                    context.abort_signal(),
+                )
+                .await
+                .map_err(|e| {
+                    format!(
+                        "Failed to append JSONL storage {}: {}",
+                        self.options.path, e.message
+                    )
+                })?;
+        }
+        let stats = inner.storage_state.apply_validated(&prepared.writes);
+        Ok(CommitResult {
+            first_seq: prepared.first_seq,
+            seqs: prepared.seqs,
+            timestamp: prepared.timestamp,
+            stats,
+        })
     }
 
-    async fn get_lanes(&self) -> Result<Vec<LanePointer>, SessionError> {
-        Ok(self.state.lock().unwrap().get_lanes())
-    }
-
-    async fn create_lane(&self, lane: &str, at: Option<&str>) -> Result<(), SessionError> {
-        let mut state = self.state.lock().unwrap();
-        state.validate_new_lane(lane);
-        state.validate_target(at);
-        let seq = state.next_sequence();
-        let mutation = SessionMutation::Lane {
-            seq,
-            lane: lane.to_string(),
-            leaf_id: at.map(|s| s.to_string()),
-        };
-        state.apply_mutation(mutation);
-        Ok(())
-    }
-
-    async fn move_lane(&self, lane: &str, to: Option<&str>) -> Result<(), SessionError> {
-        let mut state = self.state.lock().unwrap();
-        state.require_lane(lane);
-        state.validate_target(to);
-        let seq = state.next_sequence();
-        let mutation = SessionMutation::Lane {
-            seq,
-            lane: lane.to_string(),
-            leaf_id: to.map(|s| s.to_string()),
-        };
-        state.apply_mutation(mutation);
-        Ok(())
-    }
-
-    async fn append_entry(&self, entry: Entry, lane: &str) -> Result<Entry, SessionError> {
-        let (parent, seq) = {
-            let state = self.state.lock().unwrap();
-            let parent = state.require_lane(lane);
-            (parent, state.next_sequence())
-        };
-        let entry = fill_entry_base(entry, parent, seq);
-        let mutation = SessionMutation::Entry {
-            lane: Some(lane.to_string()),
-            entry: entry.clone(),
-        };
-        self.append_mutation(&mutation).await?;
-        self.state.lock().unwrap().apply_mutation(mutation);
-        Ok(entry)
-    }
-
-    async fn append_record(&self, record: LaneRecord) -> Result<LaneRecord, SessionError> {
-        let seq = {
-            let state = self.state.lock().unwrap();
-            state.next_sequence()
-        };
-        let record = fill_record_base(record, seq);
-        let mutation = SessionMutation::Record {
-            record: record.clone(),
-        };
-        self.append_mutation(&mutation).await?;
-        self.state.lock().unwrap().apply_mutation(mutation);
-        Ok(record)
-    }
-
-    async fn get_entry(&self, id: &str) -> Result<Option<Entry>, SessionError> {
-        Ok(self.state.lock().unwrap().get_entry(id))
-    }
-
-    async fn find_entries(&self, query: &EntryQuery) -> Result<Vec<Entry>, SessionError> {
-        Ok(self.state.lock().unwrap().find_entries(query))
-    }
-
-    async fn find_entries_on_branch(
+    async fn get_entries(
         &self,
-        query: &EntryQuery,
-        start: &str,
-        stop_at_type: Option<&str>,
-        stop_at_id: Option<&str>,
-    ) -> Result<Vec<Entry>, SessionError> {
-        self.state
-            .lock()
-            .unwrap()
-            .find_entries_on_branch(query, start, stop_at_type, stop_at_id)
+        ids: &[String],
+        _context: &Context,
+    ) -> Result<BTreeMap<String, Entry>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        Ok(inner.storage_state.get_entries(ids).into_iter().collect())
     }
 
-    async fn find_records(&self, query: &RecordQuery) -> Result<Vec<LaneRecord>, SessionError> {
-        Ok(self.state.lock().unwrap().find_records(query))
-    }
-
-    async fn find_open_operations(
+    async fn get_value(
         &self,
-        lane: &str,
-        limit: Option<usize>,
-    ) -> Result<Vec<OperationStartedRecord>, SessionError> {
-        Ok(self.state.lock().unwrap().find_open_operations(lane, limit))
+        address: &Value<Json>,
+        _context: &Context,
+    ) -> Result<Option<StoredValue<Json>>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        Ok(inner.storage_state.get_value(address))
     }
 
-    async fn get_log(
+    async fn scan_values(
         &self,
-        after_seq: Option<u64>,
-        limit: Option<usize>,
-    ) -> Result<Vec<LogItem>, SessionError> {
-        Ok(self.state.lock().unwrap().get_log(after_seq, limit))
+        prefix: &Value<Json>,
+        _context: &Context,
+    ) -> Result<Vec<StoredValue<Json>>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        Ok(inner.storage_state.scan_values(prefix))
     }
 
-    async fn get_name(&self) -> Result<Option<String>, SessionError> {
-        Ok(self.state.lock().unwrap().get_name())
+    async fn read_list(
+        &self,
+        address: &ValueList<Json>,
+        options: Option<ListReadOptions>,
+        _context: &Context,
+    ) -> Result<Vec<ListElement<Json>>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        Ok(inner.storage_state.read_list(address, options))
     }
 
-    async fn set_name(&self, name: Option<&str>) -> Result<(), SessionError> {
-        let mut state = self.state.lock().unwrap();
-        let seq = state.next_sequence();
-        state.apply_mutation(SessionMutation::FactName {
-            seq,
-            name: name.map(|s| s.to_string()),
-        });
+    async fn scan_branch(
+        &self,
+        query: StorageBranchScan,
+        _context: &Context,
+    ) -> Result<Vec<Entry>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        inner.storage_state.scan_branch(&query)
+    }
+
+    async fn scan_branch_structure(
+        &self,
+        query: StorageBranchScan,
+        _context: &Context,
+    ) -> Result<Vec<EntryStructure>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        inner.storage_state.scan_branch_structure(&query)
+    }
+
+    async fn scan_entries(
+        &self,
+        query: EntryScan,
+        _context: &Context,
+    ) -> Result<Vec<Entry>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        Ok(inner.storage_state.scan_entries(&query))
+    }
+
+    async fn scan_usage(
+        &self,
+        query: UsageScan,
+        _context: &Context,
+    ) -> Result<Vec<UsageRow>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        Ok(inner.storage_state.scan_usage(&query))
+    }
+
+    async fn get_stats(&self, _context: &Context) -> Result<SessionStats, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        Ok(inner.storage_state.get_stats())
+    }
+
+    async fn close(&self, _context: &Context) -> Result<(), String> {
+        let mut inner = self.inner.lock().await;
+        inner.state = StorageState::Closed;
         Ok(())
-    }
-
-    async fn get_label(&self, id: &str) -> Result<Option<String>, SessionError> {
-        Ok(self.state.lock().unwrap().get_label(id))
-    }
-
-    async fn set_label(&self, id: &str, label: Option<&str>) -> Result<(), SessionError> {
-        let mut state = self.state.lock().unwrap();
-        state.validate_target(Some(id));
-        let seq = state.next_sequence();
-        state.apply_mutation(SessionMutation::FactLabel {
-            seq,
-            target_id: id.to_string(),
-            label: label.map(|s| s.to_string()),
-        });
-        Ok(())
-    }
-
-    async fn get_stats(&self) -> Result<SessionStats, SessionError> {
-        Ok(self.state.lock().unwrap().get_stats())
     }
 }
 
-fn fill_entry_base(entry: Entry, parent_id: Option<String>, seq: u64) -> Entry {
-    let ts = pi_ai::utils::uuid::now_ms() as u64;
-    match entry {
-        Entry::Message(mut e) => {
-            e.base.parent_id = parent_id;
-            e.base.seq = seq;
-            e.base.timestamp = ts;
-            Entry::Message(e)
-        }
-        Entry::ModelChange(mut e) => {
-            e.base.parent_id = parent_id;
-            e.base.seq = seq;
-            e.base.timestamp = ts;
-            Entry::ModelChange(e)
-        }
-        Entry::ThinkingLevelChange(mut e) => {
-            e.base.parent_id = parent_id;
-            e.base.seq = seq;
-            e.base.timestamp = ts;
-            Entry::ThinkingLevelChange(e)
-        }
-        Entry::ActiveToolsChange(mut e) => {
-            e.base.parent_id = parent_id;
-            e.base.seq = seq;
-            e.base.timestamp = ts;
-            Entry::ActiveToolsChange(e)
-        }
-        Entry::Compaction(mut e) => {
-            e.base.parent_id = parent_id;
-            e.base.seq = seq;
-            e.base.timestamp = ts;
-            Entry::Compaction(e)
-        }
-        Entry::BranchSummary(mut e) => {
-            e.base.parent_id = parent_id;
-            e.base.seq = seq;
-            e.base.timestamp = ts;
-            Entry::BranchSummary(e)
-        }
-        Entry::Custom(mut e) => {
-            e.base.parent_id = parent_id;
-            e.base.seq = seq;
-            e.base.timestamp = ts;
-            Entry::Custom(e)
-        }
-    }
-}
-
-fn fill_record_base(record: LaneRecord, seq: u64) -> LaneRecord {
-    let ts = pi_ai::utils::uuid::now_ms() as u64;
-    macro_rules! set {
-        ($r:expr) => {{
-            let mut r = $r;
-            r.base.seq = seq;
-            r.base.timestamp = ts;
-            r
-        }};
-    }
-    match record {
-        LaneRecord::OperationStarted(r) => LaneRecord::OperationStarted(set!(r)),
-        LaneRecord::AbortRequested(r) => LaneRecord::AbortRequested(set!(r)),
-        LaneRecord::OperationFinished(r) => LaneRecord::OperationFinished(set!(r)),
-        LaneRecord::StepAttempt(r) => LaneRecord::StepAttempt(set!(r)),
-        LaneRecord::ToolStarted(r) => LaneRecord::ToolStarted(set!(r)),
-        LaneRecord::QueueEnqueued(r) => LaneRecord::QueueEnqueued(set!(r)),
-        LaneRecord::QueueCancelled(r) => LaneRecord::QueueCancelled(set!(r)),
-        LaneRecord::WriteDeferred(r) => LaneRecord::WriteDeferred(set!(r)),
-        LaneRecord::Usage(r) => LaneRecord::Usage(set!(r)),
-    }
-}
+#[allow(unused)]
+fn _unused(_: &StdMutex<()>) {}

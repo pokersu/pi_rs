@@ -85,7 +85,8 @@ pub struct ResolvedListReadOptions {
 }
 
 /// 对应 `ValueSetWrite`。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ValueSetWrite {
     pub namespace: String,
     pub key: String,
@@ -93,14 +94,16 @@ pub struct ValueSetWrite {
 }
 
 /// 对应 `ValueDeleteWrite`。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ValueDeleteWrite {
     pub namespace: String,
     pub key: String,
 }
 
 /// 对应 `ListAppendWrite`。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListAppendWrite {
     pub namespace: String,
     pub key: String,
@@ -108,21 +111,24 @@ pub struct ListAppendWrite {
 }
 
 /// 对应 `ListDeleteWrite`。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListDeleteWrite {
     pub namespace: String,
     pub key: String,
 }
 
 /// 对应 `ValueWrite`。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
 pub enum ValueWrite {
     Set(ValueSetWrite),
     Delete(ValueDeleteWrite),
 }
 
 /// 对应 `ListWrite`。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
 pub enum ListWrite {
     Append(ListAppendWrite),
     Delete(ListDeleteWrite),
@@ -242,7 +248,10 @@ pub fn operation_state(operation_id: &str) -> Value<Json> {
 
 /// 对应 `operationToolMemo`。
 pub fn operation_tool_memo(operation_id: &str, invocation_id: &str, name: &str) -> Value<Json> {
-    value("pi.op.tool_memo", &format!("{operation_id}:{invocation_id}:{name}"))
+    value(
+        "pi.op.tool_memo",
+        &format!("{operation_id}:{invocation_id}:{name}"),
+    )
 }
 
 /// 对应 `pendingEntry`。

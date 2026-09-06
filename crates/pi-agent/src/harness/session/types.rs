@@ -1,38 +1,50 @@
 //! Rust 翻译自 packages/agent/src/harness/session/types.ts
 //!
-//! session 持久化的类型基础：Entry / LaneRecord 系统、查询类型、存储 trait。
+//! durable session 的完整类型系统：Entry、Operation 状态机、Storage 接口、Session 接口。
+
+use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use pi_ai::Usage;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as Json;
 
-use crate::types::AgentMessage;
+use crate::harness::compaction::compaction::CompactionSettings;
+use crate::harness::context::Context;
+use crate::harness::session::values::{
+    ListElement, ListReadOptions, ListWrite, StoredValue, Value, ValueList, ValueWrite,
+};
+use crate::harness::types::AgentHarnessStreamOptions;
+use crate::types::{AgentMessage, QueueMode, ThinkingLevel};
 
-/// 对应 `SessionStopReason`
+/// 对应 `EntryType`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryType {
+    Message,
+    Compaction,
+    BranchSummary,
+    Custom,
+}
+
+/// 对应 `EntryBase`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum SessionStopReason {
-    Stop,
-    Length,
-    ToolUse,
-    Error,
-    Aborted,
-    Deferred,
-}
-
-/// 对应 `EntryBase`
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EntryBase {
-    #[serde(rename = "type")]
-    pub kind: String,
     pub id: String,
-    pub seq: u64,
     pub parent_id: Option<String>,
+    pub seq: u64,
     pub timestamp: u64,
+    #[serde(rename = "type")]
+    pub entry_type: EntryType,
+    pub custom_type: Option<String>,
 }
 
-/// 对应 `MessageEntry`
+/// 对应 `MessageEntry`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "message", rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct MessageEntry {
     #[serde(flatten)]
     pub base: EntryBase,
@@ -40,500 +52,1159 @@ pub struct MessageEntry {
     pub terminate: Option<bool>,
 }
 
-/// 对应 `ModelChangeEntry`
+/// 对应 `CompactionEntry`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "model_change", rename_all = "camelCase")]
-pub struct ModelChangeEntry {
-    #[serde(flatten)]
-    pub base: EntryBase,
-    pub provider: String,
-    pub model_id: String,
-}
-
-/// 对应 `ThinkingLevelEntry`
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(
-    tag = "type",
-    rename = "thinking_level_change",
-    rename_all = "camelCase"
-)]
-pub struct ThinkingLevelEntry {
-    #[serde(flatten)]
-    pub base: EntryBase,
-    pub thinking_level: String,
-}
-
-/// 对应 `ActiveToolsEntry`
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "active_tools_change", rename_all = "camelCase")]
-pub struct ActiveToolsEntry {
-    #[serde(flatten)]
-    pub base: EntryBase,
-    pub active_tool_names: Vec<String>,
-}
-
-/// 对应 `CompactionEntry`
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "compaction", rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct CompactionEntry {
     #[serde(flatten)]
     pub base: EntryBase,
     pub summary: String,
     pub retained_tail: Vec<AgentMessage>,
     pub tokens_before: u64,
-    pub details: Option<serde_json::Value>,
+    pub details: Option<Json>,
     pub usage: Option<Usage>,
+    pub from_hook: bool,
 }
 
-/// 对应 `BranchSummaryEntry`
+/// 对应 `BranchSummaryEntry`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "branch_summary", rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct BranchSummaryEntry {
     #[serde(flatten)]
     pub base: EntryBase,
     pub from_id: Option<String>,
     pub summary: String,
-    pub details: Option<serde_json::Value>,
+    pub details: Option<Json>,
     pub usage: Option<Usage>,
+    pub from_hook: bool,
 }
 
-/// 对应 `CustomEntry`
+/// 对应 `CustomEntry`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "custom", rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct CustomEntry {
     #[serde(flatten)]
     pub base: EntryBase,
     pub custom_type: String,
-    pub data: Option<serde_json::Value>,
+    pub data: Option<Json>,
 }
 
-/// 对应 `Entry`
-#[allow(clippy::large_enum_variant)]
+/// 对应 `Entry`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum Entry {
     Message(MessageEntry),
-    ModelChange(ModelChangeEntry),
-    ThinkingLevelChange(ThinkingLevelEntry),
-    ActiveToolsChange(ActiveToolsEntry),
     Compaction(CompactionEntry),
     BranchSummary(BranchSummaryEntry),
     Custom(CustomEntry),
 }
 
 impl Entry {
+    pub fn base(&self) -> &EntryBase {
+        match self {
+            Entry::Message(e) => &e.base,
+            Entry::Compaction(e) => &e.base,
+            Entry::BranchSummary(e) => &e.base,
+            Entry::Custom(e) => &e.base,
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.base().id
+    }
+
+    pub fn parent_id(&self) -> Option<&str> {
+        self.base().parent_id.as_deref()
+    }
+
+    pub fn entry_type(&self) -> EntryType {
+        self.base().entry_type
+    }
+}
+
+/// 对应 `EntryProjector`：将应用自定义 entry 转换为模型上下文。
+pub type EntryProjector = Arc<
+    dyn Fn(
+            &CustomEntry,
+            &Context,
+        ) -> Pin<Box<dyn Future<Output = Option<Vec<AgentMessage>>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// 对应 `NewEntry = Omit<Entry, "seq" | "timestamp">`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
+pub enum NewEntry {
+    Message(NewMessageEntry),
+    Compaction(NewCompactionEntry),
+    BranchSummary(NewBranchSummaryEntry),
+    Custom(NewCustomEntry),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewMessageEntry {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub custom_type: Option<String>,
+    pub message: AgentMessage,
+    pub terminate: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewCompactionEntry {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub custom_type: Option<String>,
+    pub summary: String,
+    pub retained_tail: Vec<AgentMessage>,
+    pub tokens_before: u64,
+    pub details: Option<Json>,
+    pub usage: Option<Usage>,
+    pub from_hook: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewBranchSummaryEntry {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub custom_type: Option<String>,
+    pub from_id: Option<String>,
+    pub summary: String,
+    pub details: Option<Json>,
+    pub usage: Option<Usage>,
+    pub from_hook: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewCustomEntry {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub custom_type: String,
+    pub data: Option<Json>,
+}
+
+impl NewEntry {
     pub fn id(&self) -> &str {
         match self {
-            Entry::Message(e) => &e.base.id,
-            Entry::ModelChange(e) => &e.base.id,
-            Entry::ThinkingLevelChange(e) => &e.base.id,
-            Entry::ActiveToolsChange(e) => &e.base.id,
-            Entry::Compaction(e) => &e.base.id,
-            Entry::BranchSummary(e) => &e.base.id,
-            Entry::Custom(e) => &e.base.id,
+            NewEntry::Message(e) => &e.id,
+            NewEntry::Compaction(e) => &e.id,
+            NewEntry::BranchSummary(e) => &e.id,
+            NewEntry::Custom(e) => &e.id,
+        }
+    }
+
+    pub fn parent_id(&self) -> Option<&str> {
+        match self {
+            NewEntry::Message(e) => e.parent_id.as_deref(),
+            NewEntry::Compaction(e) => e.parent_id.as_deref(),
+            NewEntry::BranchSummary(e) => e.parent_id.as_deref(),
+            NewEntry::Custom(e) => e.parent_id.as_deref(),
+        }
+    }
+
+    pub fn entry_type(&self) -> EntryType {
+        match self {
+            NewEntry::Message(_) => EntryType::Message,
+            NewEntry::Compaction(_) => EntryType::Compaction,
+            NewEntry::BranchSummary(_) => EntryType::BranchSummary,
+            NewEntry::Custom(_) => EntryType::Custom,
+        }
+    }
+
+    pub fn custom_type(&self) -> Option<&str> {
+        match self {
+            NewEntry::Message(e) => e.custom_type.as_deref(),
+            NewEntry::Compaction(e) => e.custom_type.as_deref(),
+            NewEntry::BranchSummary(e) => e.custom_type.as_deref(),
+            NewEntry::Custom(e) => Some(&e.custom_type),
+        }
+    }
+
+    pub fn materialize(self, seq: u64, timestamp: u64) -> Entry {
+        match self {
+            NewEntry::Message(e) => Entry::Message(MessageEntry {
+                base: EntryBase {
+                    id: e.id,
+                    parent_id: e.parent_id,
+                    seq,
+                    timestamp,
+                    entry_type: EntryType::Message,
+                    custom_type: e.custom_type,
+                },
+                message: e.message,
+                terminate: e.terminate,
+            }),
+            NewEntry::Compaction(e) => Entry::Compaction(CompactionEntry {
+                base: EntryBase {
+                    id: e.id,
+                    parent_id: e.parent_id,
+                    seq,
+                    timestamp,
+                    entry_type: EntryType::Compaction,
+                    custom_type: e.custom_type,
+                },
+                summary: e.summary,
+                retained_tail: e.retained_tail,
+                tokens_before: e.tokens_before,
+                details: e.details,
+                usage: e.usage,
+                from_hook: e.from_hook,
+            }),
+            NewEntry::BranchSummary(e) => Entry::BranchSummary(BranchSummaryEntry {
+                base: EntryBase {
+                    id: e.id,
+                    parent_id: e.parent_id,
+                    seq,
+                    timestamp,
+                    entry_type: EntryType::BranchSummary,
+                    custom_type: e.custom_type,
+                },
+                from_id: e.from_id,
+                summary: e.summary,
+                details: e.details,
+                usage: e.usage,
+                from_hook: e.from_hook,
+            }),
+            NewEntry::Custom(e) => Entry::Custom(CustomEntry {
+                base: EntryBase {
+                    id: e.id,
+                    parent_id: e.parent_id,
+                    seq,
+                    timestamp,
+                    entry_type: EntryType::Custom,
+                    custom_type: None,
+                },
+                custom_type: e.custom_type,
+                data: e.data,
+            }),
         }
     }
 }
 
-/// 对应 `RecordBase`
+/// 对应 `LaneConfiguration`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RecordBase {
-    pub id: String,
-    pub seq: u64,
-    pub lane: String,
-    pub timestamp: u64,
+#[serde(rename_all = "camelCase")]
+pub struct LaneConfiguration {
+    pub model: ModelIdentity,
+    pub thinking_level: ThinkingLevel,
+    pub active_tool_names: Vec<String>,
 }
 
-/// 对应 `OperationStartedRecord.intent`
+/// 对应 `{ provider, modelId }`。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelIdentity {
+    pub provider: String,
+    pub model_id: String,
+}
+
+/// 对应 `OperationMeta.intent`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OperationIntent {
     Run {
-        original_prompt: Vec<AgentMessage>,
-        initial_messages: Vec<serde_json::Value>,
-        system_prompt_override: Option<String>,
-        resume_data: Option<serde_json::Value>,
+        prompt_entry_ids: Vec<String>,
     },
     Compaction {
         custom_instructions: Option<String>,
-        result_entry_id: String,
     },
     Navigation {
         target_id: Option<String>,
         summarize: bool,
-        custom_instructions: Option<String>,
         label: Option<String>,
-        summary_entry_id: Option<String>,
+        custom_instructions: Option<String>,
     },
 }
 
-/// 对应 `OperationStartedRecord`
+/// 对应 `OperationMeta`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "operation_started", rename_all = "camelCase")]
-pub struct OperationStartedRecord {
-    #[serde(flatten)]
-    pub base: RecordBase,
-    pub source_leaf_id: Option<String>,
+#[serde(rename_all = "camelCase")]
+pub struct OperationMeta {
+    pub operation_id: String,
+    pub lane: String,
+    pub source_tip_id: Option<String>,
+    pub started_at: u64,
     pub intent: OperationIntent,
 }
 
-impl OperationStartedRecord {
-    pub fn kind_str(&self) -> String {
-        match &self.intent {
-            OperationIntent::Run { .. } => "run",
-            OperationIntent::Compaction { .. } => "compaction",
-            OperationIntent::Navigation { .. } => "navigation",
-        }
-        .to_string()
-    }
-}
-
-/// 对应 `AbortRequestedRecord`
+/// 对应 `Control`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "abort_requested", rename_all = "camelCase")]
-pub struct AbortRequestedRecord {
-    #[serde(flatten)]
-    pub base: RecordBase,
-    pub run_id: String,
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Control {
+    Running,
+    CancelRequested { requested_at: u64 },
 }
 
-/// 对应 `OperationFinishedRecord`
+/// 对应 `OperationError`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "operation_finished", rename_all = "camelCase")]
-pub struct OperationFinishedRecord {
-    #[serde(flatten)]
-    pub base: RecordBase,
-    pub run_id: String,
-    pub outcome: String,
-    pub error: Option<serde_json::Value>,
+#[serde(rename_all = "camelCase")]
+pub struct OperationError {
+    pub code: String,
+    pub message: String,
+    pub details: Option<Json>,
 }
 
-/// 对应 `CompactionReason`
+/// 对应 `TerminalStatus`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CompactionReason {
-    Manual,
-    Threshold,
-    Overflow,
+#[serde(rename_all = "snake_case")]
+pub enum TerminalStatus {
+    Completed,
+    Declined,
+    Aborted,
+    Failed,
 }
 
-/// 对应 `StepAttemptRecord`
+/// 对应 `OperationResultRecord`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "step_attempt", rename_all = "camelCase")]
-pub struct StepAttemptRecord {
-    #[serde(flatten)]
-    pub base: RecordBase,
-    pub run_id: String,
-    pub step: String,
-    pub attempt: u32,
-    pub result_entry_id: String,
-    pub compaction_reason: Option<CompactionReason>,
+#[serde(rename_all = "camelCase")]
+pub struct OperationResultRecord {
+    pub operation_id: String,
+    pub kind: OperationIntent,
+    pub status: TerminalStatus,
+    pub error: Option<OperationError>,
+    pub from_tip_id: Option<String>,
+    pub tip_id: Option<String>,
+    pub started_at: u64,
+    pub ended_at: u64,
 }
 
-/// 对应 `ToolStartedRecord`
+/// 对应 `Continuation`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Continuation {
+    NeedAssistant { overflow_recovery_used: bool },
+    MayFinish { include_final_assistant: bool },
+}
+
+/// 对应 `CheckpointData`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "tool_started", rename_all = "camelCase")]
-pub struct ToolStartedRecord {
-    #[serde(flatten)]
-    pub base: RecordBase,
-    pub run_id: String,
-    pub assistant_entry_id: String,
-    pub tool_index: u32,
-    pub tool_call_id: String,
-    pub tool_name: String,
-    pub effective_args: serde_json::Value,
-    pub result_entry_id: String,
-    pub replay: String,
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointData {
+    pub continuation: Continuation,
+    pub trigger_entry_id: String,
 }
 
-/// 对应 `QueueEnqueuedRecord`
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "queue_enqueued", rename_all = "camelCase")]
-pub struct QueueEnqueuedRecord {
-    #[serde(flatten)]
-    pub base: RecordBase,
-    pub queue: String,
-    pub run_id: Option<String>,
-    pub target: serde_json::Value,
-}
-
-/// 对应 `QueueCancelledRecord`
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "queue_cancelled", rename_all = "camelCase")]
-pub struct QueueCancelledRecord {
-    #[serde(flatten)]
-    pub base: RecordBase,
-    pub run_id: Option<String>,
-    pub entry_id: String,
-}
-
-/// 对应 `WriteDeferredRecord`
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "write_deferred", rename_all = "camelCase")]
-pub struct WriteDeferredRecord {
-    #[serde(flatten)]
-    pub base: RecordBase,
-    pub run_id: String,
-    pub target: serde_json::Value,
-}
-
-/// 对应 `UsageRecord`
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename = "usage", rename_all = "camelCase")]
-pub struct UsageRecord {
-    #[serde(flatten)]
-    pub base: RecordBase,
-    pub usage: Usage,
-    pub cause: String,
-    pub run_id: Option<String>,
-    pub entry_id: Option<String>,
-    pub tool_call_id: Option<String>,
-    pub attempt: Option<u32>,
-    pub stop_reason: Option<SessionStopReason>,
-    pub details: Option<serde_json::Value>,
-}
-
-/// 对应 `LaneRecord`
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum LaneRecord {
-    OperationStarted(OperationStartedRecord),
-    AbortRequested(AbortRequestedRecord),
-    OperationFinished(OperationFinishedRecord),
-    StepAttempt(StepAttemptRecord),
-    ToolStarted(ToolStartedRecord),
-    QueueEnqueued(QueueEnqueuedRecord),
-    QueueCancelled(QueueCancelledRecord),
-    WriteDeferred(WriteDeferredRecord),
-    Usage(UsageRecord),
-}
-
-/// 对应 `EntryOrder`
+/// 对应 `InboxItemKind`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum EntryOrder {
-    NewestFirst,
-    OldestFirst,
+pub enum InboxItemKind {
+    Steer,
+    FollowUp,
+    NextRun,
+    Write,
 }
 
-/// 对应 `EntryCursor`
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub struct EntryCursor {
-    pub after_seq: u64,
-}
-
-/// 对应 `EntryQuery`
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct EntryQuery {
-    pub kind: Option<String>,
-    pub custom_type: Option<String>,
-    pub order: Option<EntryOrder>,
-    pub limit: Option<usize>,
-    pub cursor: Option<EntryCursor>,
-}
-
-/// 对应 `BranchBounds`：分支扫描的边界。默认：整个路径（叶到根）。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct BranchBounds {
-    /// 默认：视图所在 lane 的叶子。
-    pub start: Option<String>,
-    /// 扫描在首个匹配 type 后停止（包含该 entry）。
-    pub stop_at_type: Option<String>,
-    /// 扫描到该 id 后停止（包含该 entry）。
-    pub stop_at_id: Option<String>,
-}
-
-/// 对应 `RecordQuery`
-#[derive(Debug, Clone, Default)]
-pub struct RecordQuery {
-    pub lane: Option<String>,
-    pub kind: Option<String>,
-    pub run_id: Option<String>,
-    pub operation_kind: Option<String>,
-    pub after_seq: Option<u64>,
-    pub order: Option<EntryOrder>,
-    pub limit: Option<usize>,
-}
-
-/// 对应 `SessionMetadata`
+/// 对应 `InboxItem`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SessionMetadata {
-    pub id: String,
-    pub created_at: u64,
-    pub parent_session_id: Option<String>,
+#[serde(rename_all = "camelCase")]
+pub struct InboxItem {
+    pub entry_id: String,
+    pub kind: InboxItemKind,
 }
 
-/// 对应 `SessionStats`
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct SessionStats {
-    pub message_count: u64,
-    pub cached_tokens: u64,
-    pub uncached_tokens: u64,
-    pub total_tokens: u64,
-    pub cost_total: f64,
+/// 对应 `NormalizedRetryPolicy`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NormalizedRetryPolicy {
+    pub max_attempts: u32,
+    pub base_delay_ms: u64,
 }
 
-/// 对应 `LanePointer`
+/// 对应 `GenerationContext`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LanePointer {
-    pub lane: String,
-    pub leaf_id: Option<String>,
+#[serde(rename_all = "camelCase")]
+pub struct GenerationContext {
+    pub step_id: String,
+    pub trigger_entry_id: String,
+    pub configuration: LaneConfiguration,
+    pub stream_options: AgentHarnessStreamOptions,
+    pub retry_policy: NormalizedRetryPolicy,
+    pub overflow_recovery_used: bool,
 }
 
-/// 对应 `LogItem`
-#[allow(clippy::large_enum_variant)]
+/// 对应 `ToolCall`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum LogItem {
-    Entry {
-        seq: u64,
-        entry: Entry,
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ToolCall {
+    Planned {
+        source_index: usize,
+        result_entry_id: String,
     },
-    Record {
-        seq: u64,
-        record: LaneRecord,
+    EffectPending {
+        source_index: usize,
+        result_entry_id: String,
+        replay: ReplayPolicy,
     },
-    Lane {
-        seq: u64,
-        lane: String,
-        leaf_id: Option<String>,
+    OutcomeReady {
+        source_index: usize,
+        result_entry_id: String,
+        terminate: bool,
     },
-    FactName {
-        seq: u64,
-        name: Option<String>,
+    Completed {
+        source_index: usize,
+        result_entry_id: String,
+        terminate: bool,
     },
-    FactLabel {
-        seq: u64,
+}
+
+/// 对应 `replay: "never" | "safe"`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplayPolicy {
+    Never,
+    Safe,
+}
+
+/// 对应 `ToolBatch`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolBatch {
+    pub assistant_entry_id: String,
+    pub configuration: LaneConfiguration,
+    pub turn_id: String,
+    pub calls: Vec<ToolCall>,
+}
+
+/// 对应 `SummaryContext`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryContext {
+    pub result_entry_id: String,
+    pub configuration: LaneConfiguration,
+    pub stream_options: AgentHarnessStreamOptions,
+    pub retry_policy: NormalizedRetryPolicy,
+}
+
+/// 对应 `Cancellable`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Cancellable {
+    pub control: Control,
+}
+
+/// 对应 `RunSettings`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSettings {
+    pub compaction: CompactionSettings,
+    pub steering_mode: QueueMode,
+    pub follow_up_mode: QueueMode,
+    pub tool_execution: ToolExecution,
+}
+
+/// 对应 `toolExecution: "sequential" | "parallel"`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolExecution {
+    Sequential,
+    Parallel,
+}
+
+/// 对应 `OperationScope`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationScope {
+    pub control: Control,
+    pub settings: RunSettings,
+    pub latest_assistant_entry_id: Option<String>,
+}
+
+/// 对应 `RetryWait`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryWait {
+    pub next_attempt: u32,
+    pub not_before: u64,
+    pub error_message: String,
+}
+
+/// 对应 `AssistantGenerationScope`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistantGenerationScope {
+    pub generation_context: GenerationContext,
+}
+
+/// 对应 `ResultBoundary`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResultBoundary {
+    ResumeCheckpoint {
+        resume_after: CheckpointData,
+    },
+    Finish,
+    CommitNavigation {
         target_id: String,
         label: Option<String>,
     },
 }
 
-/// 对应 `SessionErrorCode`
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionErrorCode {
-    NotFound,
-    AlreadyExists,
-    InvalidEntry,
-    InvalidPayload,
-    InvalidLane,
-    InvalidQuery,
-    InvalidForkTarget,
-    Storage,
+/// 对应 `SummaryTask`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryTask {
+    pub task_id: String,
+    pub reason: Option<String>,
+    pub custom_instructions: Option<String>,
+    pub boundary: ResultBoundary,
 }
 
-/// 对应 `SessionError`
-#[derive(Debug, Clone)]
-pub struct SessionError {
-    pub code: SessionErrorCode,
-    pub message: String,
+/// 对应 `SummaryGenerationScope`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryGenerationScope {
+    pub task: SummaryTask,
+    pub summary_context: SummaryContext,
 }
 
-impl SessionError {
-    pub fn new(code: SessionErrorCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
+/// 对应 `DeferredScope`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeferredScope {
+    pub control: Control,
+    pub settings: RunSettings,
+    pub latest_assistant_entry_id: Option<String>,
+    pub step_id: String,
+    pub source_entry_id: String,
+    pub poll: u64,
+    pub configuration: LaneConfiguration,
+    pub stream_options: AgentHarnessStreamOptions,
+}
+
+/// 对应 `OperationState`（13 种 flat leaf）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "at")]
+pub enum OperationState {
+    #[serde(rename = "starting")]
+    Starting {
+        #[serde(flatten)]
+        scope: OperationScope,
+    },
+    #[serde(rename = "checkpoint")]
+    Checkpoint {
+        #[serde(flatten)]
+        scope: OperationScope,
+        continuation: Continuation,
+        trigger_entry_id: String,
+    },
+    #[serde(rename = "assistant.ready")]
+    AssistantReady {
+        #[serde(flatten)]
+        scope: OperationScope,
+        generation_context: GenerationContext,
+        next_attempt: u32,
+    },
+    #[serde(rename = "assistant.effect_pending")]
+    AssistantEffectPending {
+        #[serde(flatten)]
+        scope: OperationScope,
+        generation_context: GenerationContext,
+        attempt: u32,
+        response_entry_id: String,
+        usage_id: String,
+        intended_output_limit: u64,
+        context_window: u64,
+    },
+    #[serde(rename = "assistant.retry_wait")]
+    AssistantRetryWait {
+        #[serde(flatten)]
+        scope: OperationScope,
+        generation_context: GenerationContext,
+        next_attempt: u32,
+        not_before: u64,
+        error_message: String,
+    },
+    #[serde(rename = "tools")]
+    Tools {
+        #[serde(flatten)]
+        scope: OperationScope,
+        batch: ToolBatch,
+    },
+    #[serde(rename = "deferred.suspended")]
+    DeferredSuspended {
+        #[serde(flatten)]
+        scope: DeferredScope,
+    },
+    #[serde(rename = "deferred.effect_pending")]
+    DeferredEffectPending {
+        #[serde(flatten)]
+        scope: DeferredScope,
+        response_entry_id: String,
+        usage_id: String,
+    },
+    #[serde(rename = "summary.deciding")]
+    SummaryDeciding {
+        #[serde(flatten)]
+        scope: OperationScope,
+        task: SummaryTask,
+    },
+    #[serde(rename = "summary.ready")]
+    SummaryReady {
+        #[serde(flatten)]
+        scope: OperationScope,
+        task: SummaryTask,
+        summary_context: SummaryContext,
+        next_attempt: u32,
+    },
+    #[serde(rename = "summary.effect_pending")]
+    SummaryEffectPending {
+        #[serde(flatten)]
+        scope: OperationScope,
+        task: SummaryTask,
+        summary_context: SummaryContext,
+        attempt: u32,
+        request: Option<SummaryRequest>,
+        usage_ids: Vec<String>,
+    },
+    #[serde(rename = "summary.retry_wait")]
+    SummaryRetryWait {
+        #[serde(flatten)]
+        scope: OperationScope,
+        task: SummaryTask,
+        summary_context: SummaryContext,
+        next_attempt: u32,
+        not_before: u64,
+        error_message: String,
+    },
+    #[serde(rename = "navigation.ready_to_commit")]
+    NavigationReadyToCommit {
+        #[serde(flatten)]
+        scope: OperationScope,
+        target_id: Option<String>,
+        label: Option<String>,
+    },
+}
+
+/// 对应 `SummaryRequest = { index, usageId }`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryRequest {
+    pub index: usize,
+    pub usage_id: String,
+}
+
+impl OperationState {
+    pub fn scope(&self) -> &OperationScope {
+        match self {
+            OperationState::Starting { scope }
+            | OperationState::Checkpoint { scope, .. }
+            | OperationState::AssistantReady { scope, .. }
+            | OperationState::AssistantEffectPending { scope, .. }
+            | OperationState::AssistantRetryWait { scope, .. }
+            | OperationState::Tools { scope, .. }
+            | OperationState::SummaryDeciding { scope, .. }
+            | OperationState::SummaryReady { scope, .. }
+            | OperationState::SummaryEffectPending { scope, .. }
+            | OperationState::SummaryRetryWait { scope, .. }
+            | OperationState::NavigationReadyToCommit { scope, .. } => scope,
+            OperationState::DeferredSuspended { scope: _ }
+            | OperationState::DeferredEffectPending { scope: _, .. } => {
+                // DeferredScope 与 OperationScope 字段同名，此处借用 scope 的公共字段。
+                unreachable!("deferred scope handled separately")
+            }
+        }
+    }
+
+    pub fn at(&self) -> &'static str {
+        match self {
+            OperationState::Starting { .. } => "starting",
+            OperationState::Checkpoint { .. } => "checkpoint",
+            OperationState::AssistantReady { .. } => "assistant.ready",
+            OperationState::AssistantEffectPending { .. } => "assistant.effect_pending",
+            OperationState::AssistantRetryWait { .. } => "assistant.retry_wait",
+            OperationState::Tools { .. } => "tools",
+            OperationState::DeferredSuspended { .. } => "deferred.suspended",
+            OperationState::DeferredEffectPending { .. } => "deferred.effect_pending",
+            OperationState::SummaryDeciding { .. } => "summary.deciding",
+            OperationState::SummaryReady { .. } => "summary.ready",
+            OperationState::SummaryEffectPending { .. } => "summary.effect_pending",
+            OperationState::SummaryRetryWait { .. } => "summary.retry_wait",
+            OperationState::NavigationReadyToCommit { .. } => "navigation.ready_to_commit",
         }
     }
 }
 
-impl std::fmt::Display for SessionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
+/// 对应 `Operation = { meta, state }`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Operation {
+    pub meta: OperationMeta,
+    pub state: OperationState,
 }
 
-impl std::error::Error for SessionError {}
+/// 对应 `LaneState`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaneState {
+    pub current_operation_id: Option<String>,
+    pub last_operation_id: Option<String>,
+    pub inbox: Vec<InboxItem>,
+}
 
-/// 对应 `ForkPosition`
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 对应 `PendingEntry`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
+pub enum PendingEntry {
+    Message {
+        payload: AgentMessage,
+    },
+    Custom {
+        custom_type: String,
+        payload: Option<Json>,
+    },
+}
+
+/// 对应 `DurableFileOperations`。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DurableFileOperations {
+    pub read: Vec<String>,
+    pub written: Vec<String>,
+    pub edited: Vec<String>,
+}
+
+/// 对应 `DurableStructuralPreparation`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DurableStructuralPreparation {
+    Compaction {
+        messages_to_summarize: Vec<AgentMessage>,
+        turn_prefix_messages: Vec<AgentMessage>,
+        retained_tail: Vec<AgentMessage>,
+        is_split_turn: bool,
+        tokens_before: u64,
+        previous_summary: Option<String>,
+        file_ops: DurableFileOperations,
+        settings: CompactionSettings,
+    },
+    BranchSummary {
+        messages: Vec<AgentMessage>,
+        file_ops: DurableFileOperations,
+        total_tokens: u64,
+    },
+}
+
+/// 对应 `UsageRow`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageRow {
+    pub id: String,
+    pub seq: u64,
+    pub usage: Usage,
+    pub entry_id: Option<String>,
+    pub adjustment: bool,
+    pub details: Option<Json>,
+}
+
+/// 对应 `EntryWrite`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryWrite {
+    pub kind: WriteKind,
+    pub entry: NewEntry,
+}
+
+/// 对应 `UsageWrite`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageWrite {
+    pub kind: WriteKind,
+    pub row: UsageRow,
+}
+
+/// 对应 `Write.kind`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteKind {
+    Entry,
+    Usage,
+    Value,
+    List,
+}
+
+/// 对应 `Write`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
+pub enum Write {
+    Entry(EntryWrite),
+    Usage(UsageWrite),
+    Value(ValueWrite),
+    List(ListWrite),
+}
+
+/// 对应 `CommitResult`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitResult {
+    pub first_seq: u64,
+    pub seqs: Vec<u64>,
+    pub timestamp: u64,
+    pub stats: SessionStats,
+}
+
+/// 对应 `EntryStructure`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryStructure {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub seq: u64,
+    pub timestamp: u64,
+    #[serde(rename = "type")]
+    pub entry_type: EntryType,
+    pub custom_type: Option<String>,
+}
+
+/// 对应 `EntryCursor`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntryCursor {
+    pub seq: u64,
+}
+
+/// 对应 `BranchScan`。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchScan {
+    pub start: Option<String>,
+    pub stop_at_type: Option<EntryType>,
+    pub stop_at_id: Option<String>,
+    #[serde(rename = "type")]
+    pub entry_type: Option<EntryType>,
+    pub custom_type: Option<String>,
+    pub order: Option<ScanOrder>,
+    pub limit: Option<usize>,
+    pub cursor: Option<EntryCursor>,
+}
+
+/// 对应 `order: "newestFirst" | "oldestFirst" | "asc" | "desc"`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ScanOrder {
+    NewestFirst,
+    OldestFirst,
+    Asc,
+    Desc,
+}
+
+/// 对应 `StorageBranchScan`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageBranchScan {
+    #[serde(flatten)]
+    pub scan: BranchScan,
+    pub start: String,
+}
+
+/// 对应 `EntryScan`。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryScan {
+    #[serde(rename = "type")]
+    pub entry_type: Option<EntryType>,
+    pub custom_type: Option<String>,
+    pub from_seq: Option<u64>,
+    pub to_seq: Option<u64>,
+    pub order: Option<ScanOrder>,
+    pub limit: Option<usize>,
+}
+
+/// 对应 `UsageScan`。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageScan {
+    pub from_seq: Option<u64>,
+    pub to_seq: Option<u64>,
+    pub order: Option<ScanOrder>,
+    pub limit: Option<usize>,
+}
+
+/// 对应 `SessionStats`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStats {
+    pub message_count: u64,
+    pub usage: Usage,
+}
+
+/// 对应 `SessionMetadata`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMetadata {
+    pub id: String,
+    pub created_at: u64,
+    pub storage_version: u32,
+    pub cwd: Option<String>,
+    pub parent_session_id: Option<String>,
+    pub legacy_parent_session_path: Option<String>,
+}
+
+/// 对应 `IdGenerator`。
+pub trait IdGenerator: Send + Sync {
+    fn next(&self, timestamp_ms: Option<u64>) -> String;
+}
+
+/// 对应 `EntryQuery`。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryQuery {
+    #[serde(rename = "type")]
+    pub entry_type: Option<EntryType>,
+    pub custom_type: Option<String>,
+    pub order: Option<ScanOrder>,
+    pub limit: Option<usize>,
+    pub cursor: Option<EntryCursor>,
+}
+
+/// 对应 `Storage`。
+#[async_trait::async_trait]
+pub trait Storage: Send + Sync {
+    async fn commit(&self, writes: Vec<Write>, context: &Context) -> Result<CommitResult, String>;
+    async fn get_entries(
+        &self,
+        ids: &[String],
+        context: &Context,
+    ) -> Result<BTreeMap<String, Entry>, String>;
+    async fn get_value(
+        &self,
+        address: &Value<Json>,
+        context: &Context,
+    ) -> Result<Option<StoredValue<Json>>, String>;
+    async fn scan_values(
+        &self,
+        prefix: &Value<Json>,
+        context: &Context,
+    ) -> Result<Vec<StoredValue<Json>>, String>;
+    async fn read_list(
+        &self,
+        address: &ValueList<Json>,
+        options: Option<ListReadOptions>,
+        context: &Context,
+    ) -> Result<Vec<ListElement<Json>>, String>;
+    async fn scan_branch(
+        &self,
+        query: StorageBranchScan,
+        context: &Context,
+    ) -> Result<Vec<Entry>, String>;
+    async fn scan_branch_structure(
+        &self,
+        query: StorageBranchScan,
+        context: &Context,
+    ) -> Result<Vec<EntryStructure>, String>;
+    async fn scan_entries(&self, query: EntryScan, context: &Context)
+    -> Result<Vec<Entry>, String>;
+    async fn scan_usage(
+        &self,
+        query: UsageScan,
+        context: &Context,
+    ) -> Result<Vec<UsageRow>, String>;
+    async fn get_stats(&self, context: &Context) -> Result<SessionStats, String>;
+    async fn close(&self, context: &Context) -> Result<(), String>;
+}
+
+/// 对应 `SessionReader`。
+#[async_trait::async_trait]
+pub trait SessionReader: Send + Sync {
+    async fn get_entries(
+        &self,
+        ids: &[String],
+        context: &Context,
+    ) -> Result<BTreeMap<String, Entry>, String>;
+    async fn get_stats(&self, context: &Context) -> Result<SessionStats, String>;
+    async fn get_value(
+        &self,
+        address: &Value<Json>,
+        context: &Context,
+    ) -> Result<Option<StoredValue<Json>>, String>;
+    async fn scan_values(
+        &self,
+        prefix: &Value<Json>,
+        context: &Context,
+    ) -> Result<Vec<StoredValue<Json>>, String>;
+    async fn read_list(
+        &self,
+        address: &ValueList<Json>,
+        options: Option<ListReadOptions>,
+        context: &Context,
+    ) -> Result<Vec<ListElement<Json>>, String>;
+    async fn scan_branch(
+        &self,
+        query: StorageBranchScan,
+        context: &Context,
+    ) -> Result<Vec<Entry>, String>;
+}
+
+/// 对应 `SessionMutation`。
+#[async_trait::async_trait]
+pub trait SessionMutation: SessionReader {
+    async fn commit(&self, writes: Vec<Write>, context: &Context) -> Result<CommitResult, String>;
+    async fn end(&self, context: &Context) -> Result<(), String>;
+}
+
+/// 对应 `SessionMutationCallback`。
+pub type SessionMutationCallback<T> = Arc<
+    dyn Fn(
+            Arc<dyn SessionMutation>,
+            Context,
+        ) -> Pin<Box<dyn Future<Output = Result<T, String>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// 对应 `Branch`。
+#[async_trait::async_trait]
+pub trait Branch: Send + Sync {
+    fn name(&self) -> &str;
+    async fn get_tip_id(&self, context: &Context) -> Result<Option<String>, String>;
+    async fn find_entries(
+        &self,
+        query: Option<BranchScan>,
+        context: &Context,
+    ) -> Result<Vec<Entry>, String>;
+    async fn find_entry(
+        &self,
+        query: Option<BranchScan>,
+        context: &Context,
+    ) -> Result<Option<Entry>, String>;
+    async fn append_message(
+        &self,
+        message: AgentMessage,
+        context: &Context,
+    ) -> Result<String, String>;
+    async fn append_custom_entry(
+        &self,
+        custom_type: String,
+        data: Option<Json>,
+        context: &Context,
+    ) -> Result<String, String>;
+}
+
+/// 对应 `Session`。
+#[async_trait::async_trait]
+pub trait Session: SessionReader + Send + Sync {
+    fn metadata(&self) -> &SessionMetadata;
+    fn id_generator(&self) -> Arc<dyn IdGenerator>;
+    async fn get_entry(&self, id: &str, context: &Context) -> Result<Option<Entry>, String>;
+    async fn get_name(&self, context: &Context) -> Result<Option<String>, String>;
+    async fn get_label(&self, target_id: &str, context: &Context)
+    -> Result<Option<String>, String>;
+    async fn find_entries(
+        &self,
+        query: Option<EntryQuery>,
+        context: &Context,
+    ) -> Result<Vec<Entry>, String>;
+    async fn find_entry(
+        &self,
+        query: Option<EntryQuery>,
+        context: &Context,
+    ) -> Result<Option<Entry>, String>;
+    async fn branch(
+        &self,
+        name: &str,
+        context: &Context,
+    ) -> Result<Option<Arc<dyn Branch>>, String>;
+    async fn create_branch(
+        &self,
+        name: &str,
+        at: Option<String>,
+        context: &Context,
+    ) -> Result<Arc<dyn Branch>, String>;
+    async fn begin_mutation(&self, context: &Context) -> Result<Arc<dyn SessionMutation>, String>;
+    async fn set_value(
+        &self,
+        address: &Value<Json>,
+        next: Json,
+        context: &Context,
+    ) -> Result<(), String>;
+    async fn delete_value(&self, address: &Value<Json>, context: &Context) -> Result<(), String>;
+    async fn append_list(
+        &self,
+        address: &ValueList<Json>,
+        element: Json,
+        context: &Context,
+    ) -> Result<(), String>;
+    async fn delete_list(&self, address: &ValueList<Json>, context: &Context)
+    -> Result<(), String>;
+    async fn set_name(&self, name: Option<String>, context: &Context) -> Result<(), String>;
+    async fn set_label(
+        &self,
+        target_id: &str,
+        label: Option<String>,
+        context: &Context,
+    ) -> Result<(), String>;
+    async fn close(&self, context: &Context) -> Result<(), String>;
+}
+
+/// 对应 `Session.mutate` 的 free function 版本（Rust 泛型方法不 dyn 兼容）。
+pub async fn mutate<T: Send + 'static>(
+    session: &dyn Session,
+    mutation: SessionMutationCallback<T>,
+    context: &Context,
+) -> Result<T, String> {
+    let mutator = session.begin_mutation(context).await?;
+    let result = mutation(Arc::clone(&mutator), context.clone()).await?;
+    let _ = mutator.end(context).await;
+    Ok(result)
+}
+
+/// 对应 `SessionCreateOptions`。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionCreateOptions {
+    pub id: Option<String>,
+    pub parent_session_id: Option<String>,
+}
+
+/// 对应 `ForkOptions`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "scope", rename_all = "snake_case")]
+pub enum ForkOptions {
+    Branch {
+        branch: String,
+        entry_id: Option<String>,
+        position: Option<ForkPosition>,
+        id: Option<String>,
+    },
+    Tree {
+        id: Option<String>,
+    },
+}
+
+/// 对应 `position: "before" | "at"`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ForkPosition {
     Before,
     At,
 }
 
-/// 对应 `ForkOptions`（默认 `scope` 为 `branch`）。
-#[derive(Debug, Clone)]
-pub enum ForkOptions {
-    Branch {
-        entry_id: Option<String>,
-        position: Option<ForkPosition>,
-    },
-    Tree,
-}
-
-impl Default for ForkOptions {
-    fn default() -> Self {
-        ForkOptions::Branch {
-            entry_id: None,
-            position: None,
-        }
-    }
-}
-
-/// 对应 `SessionStorage`（简化：去掉泛型元数据参数）。
+/// 对应 `SessionRepo`。
 #[async_trait::async_trait]
-pub trait SessionStorage: Send + Sync {
-    async fn get_metadata(&self) -> Result<SessionMetadata, SessionError>;
-    async fn get_lanes(&self) -> Result<Vec<LanePointer>, SessionError>;
-    async fn create_lane(&self, lane: &str, at: Option<&str>) -> Result<(), SessionError>;
-    async fn move_lane(&self, lane: &str, to: Option<&str>) -> Result<(), SessionError>;
-    async fn append_entry(&self, entry: Entry, lane: &str) -> Result<Entry, SessionError>;
-    async fn append_record(&self, record: LaneRecord) -> Result<LaneRecord, SessionError>;
-    async fn get_entry(&self, id: &str) -> Result<Option<Entry>, SessionError>;
-    async fn find_entries(&self, query: &EntryQuery) -> Result<Vec<Entry>, SessionError>;
-    async fn find_entries_on_branch(
+pub trait SessionRepo: Send + Sync {
+    async fn create(
         &self,
-        query: &EntryQuery,
-        start: &str,
-        stop_at_type: Option<&str>,
-        stop_at_id: Option<&str>,
-    ) -> Result<Vec<Entry>, SessionError>;
-    async fn find_records(&self, query: &RecordQuery) -> Result<Vec<LaneRecord>, SessionError>;
-    async fn find_open_operations(
+        options: SessionCreateOptions,
+        context: &Context,
+    ) -> Result<Arc<dyn Session>, String>;
+    async fn open(
         &self,
-        lane: &str,
-        limit: Option<usize>,
-    ) -> Result<Vec<OperationStartedRecord>, SessionError>;
-    async fn get_log(
+        metadata: SessionMetadata,
+        context: &Context,
+    ) -> Result<Arc<dyn Session>, String>;
+    async fn list(&self, context: &Context) -> Result<Vec<SessionMetadata>, String>;
+    async fn delete(&self, metadata: SessionMetadata, context: &Context) -> Result<(), String>;
+    async fn fork(
         &self,
-        after_seq: Option<u64>,
-        limit: Option<usize>,
-    ) -> Result<Vec<LogItem>, SessionError>;
-    async fn get_name(&self) -> Result<Option<String>, SessionError>;
-    async fn set_name(&self, name: Option<&str>) -> Result<(), SessionError>;
-    async fn get_label(&self, id: &str) -> Result<Option<String>, SessionError>;
-    async fn set_label(&self, id: &str, label: Option<&str>) -> Result<(), SessionError>;
-    async fn get_stats(&self) -> Result<SessionStats, SessionError>;
-}
-
-/// 对应 `SessionTree`（简化）。
-#[async_trait::async_trait]
-pub trait SessionTree: Send + Sync {
-    async fn get_leaf_id(&self) -> Result<Option<String>, SessionError>;
-    async fn get_entry(&self, id: &str) -> Result<Option<Entry>, SessionError>;
-    async fn get_stats(&self) -> Result<SessionStats, SessionError>;
-    async fn get_name(&self) -> Result<Option<String>, SessionError>;
-    async fn set_name(&self, name: Option<&str>) -> Result<(), SessionError>;
-    async fn get_label(&self, target_id: &str) -> Result<Option<String>, SessionError>;
-    async fn set_label(&self, target_id: &str, label: Option<&str>) -> Result<(), SessionError>;
-    async fn find_entries(&self, query: &EntryQuery) -> Result<Vec<Entry>, SessionError>;
-    async fn find_entry(&self, query: &EntryQuery) -> Result<Option<Entry>, SessionError>;
-    async fn find_entries_on_branch(
-        &self,
-        query: &EntryQuery,
-        bounds: &BranchBounds,
-    ) -> Result<Vec<Entry>, SessionError>;
-    async fn find_entry_on_branch(
-        &self,
-        query: &EntryQuery,
-        bounds: &BranchBounds,
-    ) -> Result<Option<Entry>, SessionError>;
-    async fn append_message(&self, message: AgentMessage) -> Result<String, SessionError>;
-    async fn append_custom_entry(
-        &self,
-        custom_type: &str,
-        data: Option<serde_json::Value>,
-    ) -> Result<String, SessionError>;
+        source: SessionMetadata,
+        options: ForkOptions,
+        context: &Context,
+    ) -> Result<Arc<dyn Session>, String>;
 }

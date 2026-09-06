@@ -1,363 +1,344 @@
 //! Rust 翻译自 packages/agent/src/harness/session/memory.ts
+//!
+//! 基于 InMemoryStorageState 的内存 Storage 与 SessionRepo。
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex as StdMutex};
 
-use crate::harness::session::session::Session;
-use crate::harness::session::state::SessionState;
+use serde_json::Value as Json;
+use tokio::sync::Mutex;
+
+use crate::harness::context::Context;
+use crate::harness::session::commit::CommittedWrite;
+use crate::harness::session::fork::{
+    ForkDestinationSnapshot, ForkSourceSnapshot, fork_snapshot_writes,
+};
+use crate::harness::session::in_memory_storage_state::InMemoryStorageState;
+use crate::harness::session::session::StorageBackedSession;
 use crate::harness::session::types::{
-    Entry, EntryQuery, ForkOptions, LanePointer, LaneRecord, LogItem, OperationStartedRecord,
-    RecordQuery, SessionError, SessionErrorCode, SessionMetadata, SessionStats, SessionStorage,
+    CommitResult, Entry, EntryScan, EntryStructure, EntryType, Session, SessionCreateOptions,
+    SessionMetadata, SessionRepo, SessionStats, Storage, StorageBranchScan, UsageRow, UsageScan,
+    Write,
+};
+use crate::harness::session::values::{
+    ListElement, ListReadOptions, StoredValue, Value, ValueList,
 };
 
-/// 对应 `InMemorySessionStorage`
-pub struct InMemorySessionStorage {
-    metadata: SessionMetadata,
-    state: Mutex<SessionState>,
+const MEMORY_STORAGE_VERSION: u32 = 1;
+
+struct MemoryStorageInner {
+    storage_state: InMemoryStorageState,
+    state: StorageState,
 }
 
-impl InMemorySessionStorage {
-    pub fn new(metadata: SessionMetadata) -> Self {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StorageState {
+    Open,
+    Closed,
+}
+
+/// 对应 `MemoryStorage`。
+pub struct MemoryStorage {
+    inner: Arc<Mutex<MemoryStorageInner>>,
+}
+
+impl MemoryStorage {
+    pub fn new() -> Self {
         Self {
-            metadata,
-            state: Mutex::new(SessionState::new()),
+            inner: Arc::new(Mutex::new(MemoryStorageInner {
+                storage_state: InMemoryStorageState::new(),
+                state: StorageState::Open,
+            })),
         }
     }
 
-    /// 对应 `fork`：复制 source 的 fork mutations 到新 storage。
-    pub fn fork(&self, metadata: SessionMetadata, options: &ForkOptions) -> Self {
-        let storage = Self::new(metadata);
-        let mutations = self.state.lock().unwrap().create_fork_mutations(options);
-        for mutation in mutations {
-            storage.state.lock().unwrap().apply_mutation(mutation);
+    pub fn from_snapshot(snapshot: &ForkDestinationSnapshot) -> Self {
+        let storage = Self::new();
+        let writes = fork_snapshot_writes(snapshot);
+        {
+            let mut inner = storage.inner.blocking_lock();
+            inner
+                .storage_state
+                .validate_committed(&writes)
+                .expect("fork snapshot validation failed");
+            inner.storage_state.apply_validated(&writes);
         }
         storage
+    }
+
+    fn assert_open(&self, inner: &MemoryStorageInner) -> Result<(), String> {
+        if inner.state != StorageState::Open {
+            return Err("MemoryStorage is closed".to_string());
+        }
+        Ok(())
+    }
+
+    fn capture_fork_source(&self) -> Result<ForkSourceSnapshot, String> {
+        let inner = self.inner.blocking_lock();
+        self.assert_open(&inner)?;
+        let (entries, scalar_values) = inner.storage_state.snapshot_entries_and_values();
+        Ok(ForkSourceSnapshot {
+            entries,
+            scalar_values,
+            entries_complete: Some(true),
+        })
+    }
+}
+
+impl Default for MemoryStorage {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 #[async_trait::async_trait]
-impl SessionStorage for InMemorySessionStorage {
-    async fn get_metadata(&self) -> Result<SessionMetadata, SessionError> {
-        Ok(self.metadata.clone())
+impl Storage for MemoryStorage {
+    async fn commit(&self, writes: Vec<Write>, _context: &Context) -> Result<CommitResult, String> {
+        let mut inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        let timestamp = pi_ai::utils::uuid::now_ms() as u64;
+        let prepared = inner.storage_state.prepare_commit(&writes, timestamp);
+        let stats = inner.storage_state.apply_validated(&prepared.writes);
+        Ok(CommitResult {
+            first_seq: prepared.first_seq,
+            seqs: prepared.seqs,
+            timestamp: prepared.timestamp,
+            stats,
+        })
     }
 
-    async fn get_lanes(&self) -> Result<Vec<LanePointer>, SessionError> {
-        Ok(self.state.lock().unwrap().get_lanes())
-    }
-
-    async fn create_lane(&self, lane: &str, at: Option<&str>) -> Result<(), SessionError> {
-        let mut state = self.state.lock().unwrap();
-        state.validate_new_lane(lane);
-        state.validate_target(at);
-        let seq = state.next_sequence();
-        state.apply_mutation(crate::harness::session::state::SessionMutation::Lane {
-            seq,
-            lane: lane.to_string(),
-            leaf_id: at.map(|s| s.to_string()),
-        });
-        Ok(())
-    }
-
-    async fn move_lane(&self, lane: &str, to: Option<&str>) -> Result<(), SessionError> {
-        let mut state = self.state.lock().unwrap();
-        state.require_lane(lane);
-        state.validate_target(to);
-        let seq = state.next_sequence();
-        state.apply_mutation(crate::harness::session::state::SessionMutation::Lane {
-            seq,
-            lane: lane.to_string(),
-            leaf_id: to.map(|s| s.to_string()),
-        });
-        Ok(())
-    }
-
-    async fn append_entry(&self, entry: Entry, lane: &str) -> Result<Entry, SessionError> {
-        let mut state = self.state.lock().unwrap();
-        let parent = state.require_lane(lane);
-        state.validate_unused_id(entry.id());
-        // 填充 parentId/seq/timestamp（对应 TS 的 storage-assigned 字段）。
-        let entry = fill_entry_base(entry, parent, state.next_sequence());
-        state.apply_mutation(crate::harness::session::state::SessionMutation::Entry {
-            lane: Some(lane.to_string()),
-            entry: entry.clone(),
-        });
-        Ok(entry)
-    }
-
-    async fn append_record(&self, record: LaneRecord) -> Result<LaneRecord, SessionError> {
-        let mut state = self.state.lock().unwrap();
-        state.require_lane(record_lane_of(&record));
-        state.validate_unused_id(record_id_of(&record));
-        let record = fill_record_base(record, state.next_sequence());
-        state.apply_mutation(crate::harness::session::state::SessionMutation::Record {
-            record: record.clone(),
-        });
-        Ok(record)
-    }
-
-    async fn get_entry(&self, id: &str) -> Result<Option<Entry>, SessionError> {
-        Ok(self.state.lock().unwrap().get_entry(id))
-    }
-
-    async fn find_entries(&self, query: &EntryQuery) -> Result<Vec<Entry>, SessionError> {
-        Ok(self.state.lock().unwrap().find_entries(query))
-    }
-
-    async fn find_entries_on_branch(
+    async fn get_entries(
         &self,
-        query: &EntryQuery,
-        start: &str,
-        stop_at_type: Option<&str>,
-        stop_at_id: Option<&str>,
-    ) -> Result<Vec<Entry>, SessionError> {
-        self.state
-            .lock()
-            .unwrap()
-            .find_entries_on_branch(query, start, stop_at_type, stop_at_id)
+        ids: &[String],
+        _context: &Context,
+    ) -> Result<BTreeMap<String, Entry>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        Ok(inner.storage_state.get_entries(ids).into_iter().collect())
     }
 
-    async fn find_records(&self, query: &RecordQuery) -> Result<Vec<LaneRecord>, SessionError> {
-        Ok(self.state.lock().unwrap().find_records(query))
-    }
-
-    async fn find_open_operations(
+    async fn get_value(
         &self,
-        lane: &str,
-        limit: Option<usize>,
-    ) -> Result<Vec<OperationStartedRecord>, SessionError> {
-        Ok(self.state.lock().unwrap().find_open_operations(lane, limit))
+        address: &Value<Json>,
+        _context: &Context,
+    ) -> Result<Option<StoredValue<Json>>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        Ok(inner.storage_state.get_value(address))
     }
 
-    async fn get_log(
+    async fn scan_values(
         &self,
-        after_seq: Option<u64>,
-        limit: Option<usize>,
-    ) -> Result<Vec<LogItem>, SessionError> {
-        Ok(self.state.lock().unwrap().get_log(after_seq, limit))
+        prefix: &Value<Json>,
+        _context: &Context,
+    ) -> Result<Vec<StoredValue<Json>>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        Ok(inner.storage_state.scan_values(prefix))
     }
 
-    async fn get_name(&self) -> Result<Option<String>, SessionError> {
-        Ok(self.state.lock().unwrap().get_name())
+    async fn read_list(
+        &self,
+        address: &ValueList<Json>,
+        options: Option<ListReadOptions>,
+        _context: &Context,
+    ) -> Result<Vec<ListElement<Json>>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        Ok(inner.storage_state.read_list(address, options))
     }
 
-    async fn set_name(&self, name: Option<&str>) -> Result<(), SessionError> {
-        let mut state = self.state.lock().unwrap();
-        let seq = state.next_sequence();
-        state.apply_mutation(crate::harness::session::state::SessionMutation::FactName {
-            seq,
-            name: name.map(|s| s.to_string()),
-        });
+    async fn scan_branch(
+        &self,
+        query: StorageBranchScan,
+        _context: &Context,
+    ) -> Result<Vec<Entry>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        inner.storage_state.scan_branch(&query)
+    }
+
+    async fn scan_branch_structure(
+        &self,
+        query: StorageBranchScan,
+        _context: &Context,
+    ) -> Result<Vec<EntryStructure>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        inner.storage_state.scan_branch_structure(&query)
+    }
+
+    async fn scan_entries(
+        &self,
+        query: EntryScan,
+        _context: &Context,
+    ) -> Result<Vec<Entry>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        Ok(inner.storage_state.scan_entries(&query))
+    }
+
+    async fn scan_usage(
+        &self,
+        query: UsageScan,
+        _context: &Context,
+    ) -> Result<Vec<UsageRow>, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        Ok(inner.storage_state.scan_usage(&query))
+    }
+
+    async fn get_stats(&self, _context: &Context) -> Result<SessionStats, String> {
+        let inner = self.inner.lock().await;
+        self.assert_open(&inner)?;
+        Ok(inner.storage_state.get_stats())
+    }
+
+    async fn close(&self, _context: &Context) -> Result<(), String> {
+        let mut inner = self.inner.lock().await;
+        inner.state = StorageState::Closed;
         Ok(())
     }
+}
 
-    async fn get_label(&self, id: &str) -> Result<Option<String>, SessionError> {
-        Ok(self.state.lock().unwrap().get_label(id))
-    }
+#[derive(Clone)]
+struct MemorySessionRecord {
+    metadata: SessionMetadata,
+    storage: Arc<MemoryStorage>,
+}
 
-    async fn set_label(&self, id: &str, label: Option<&str>) -> Result<(), SessionError> {
-        let mut state = self.state.lock().unwrap();
-        state.validate_target(Some(id));
-        let seq = state.next_sequence();
-        state.apply_mutation(crate::harness::session::state::SessionMutation::FactLabel {
-            seq,
-            target_id: id.to_string(),
-            label: label.map(|s| s.to_string()),
-        });
-        Ok(())
-    }
+/// 对应 `MemorySessionRepo`。
+pub struct MemorySessionRepo {
+    sessions: StdMutex<BTreeMap<String, MemorySessionRecord>>,
+    pending_ids: StdMutex<Vec<String>>,
+}
 
-    async fn get_stats(&self) -> Result<SessionStats, SessionError> {
-        Ok(self.state.lock().unwrap().get_stats())
+impl Default for MemorySessionRepo {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-fn fill_entry_base(entry: Entry, parent_id: Option<String>, seq: u64) -> Entry {
-    let ts = pi_ai::utils::uuid::now_ms() as u64;
-    match entry {
-        Entry::Message(mut e) => {
-            e.base.parent_id = parent_id;
-            e.base.seq = seq;
-            e.base.timestamp = ts;
-            Entry::Message(e)
-        }
-        Entry::ModelChange(mut e) => {
-            e.base.parent_id = parent_id;
-            e.base.seq = seq;
-            e.base.timestamp = ts;
-            Entry::ModelChange(e)
-        }
-        Entry::ThinkingLevelChange(mut e) => {
-            e.base.parent_id = parent_id;
-            e.base.seq = seq;
-            e.base.timestamp = ts;
-            Entry::ThinkingLevelChange(e)
-        }
-        Entry::ActiveToolsChange(mut e) => {
-            e.base.parent_id = parent_id;
-            e.base.seq = seq;
-            e.base.timestamp = ts;
-            Entry::ActiveToolsChange(e)
-        }
-        Entry::Compaction(mut e) => {
-            e.base.parent_id = parent_id;
-            e.base.seq = seq;
-            e.base.timestamp = ts;
-            Entry::Compaction(e)
-        }
-        Entry::BranchSummary(mut e) => {
-            e.base.parent_id = parent_id;
-            e.base.seq = seq;
-            e.base.timestamp = ts;
-            Entry::BranchSummary(e)
-        }
-        Entry::Custom(mut e) => {
-            e.base.parent_id = parent_id;
-            e.base.seq = seq;
-            e.base.timestamp = ts;
-            Entry::Custom(e)
-        }
-    }
-}
-
-fn fill_record_base(record: LaneRecord, seq: u64) -> LaneRecord {
-    let ts = pi_ai::utils::uuid::now_ms() as u64;
-    macro_rules! set {
-        ($r:expr) => {{
-            let mut r = $r;
-            r.base.seq = seq;
-            r.base.timestamp = ts;
-            r
-        }};
-    }
-    match record {
-        LaneRecord::OperationStarted(r) => LaneRecord::OperationStarted(set!(r)),
-        LaneRecord::AbortRequested(r) => LaneRecord::AbortRequested(set!(r)),
-        LaneRecord::OperationFinished(r) => LaneRecord::OperationFinished(set!(r)),
-        LaneRecord::StepAttempt(r) => LaneRecord::StepAttempt(set!(r)),
-        LaneRecord::ToolStarted(r) => LaneRecord::ToolStarted(set!(r)),
-        LaneRecord::QueueEnqueued(r) => LaneRecord::QueueEnqueued(set!(r)),
-        LaneRecord::QueueCancelled(r) => LaneRecord::QueueCancelled(set!(r)),
-        LaneRecord::WriteDeferred(r) => LaneRecord::WriteDeferred(set!(r)),
-        LaneRecord::Usage(r) => LaneRecord::Usage(set!(r)),
-    }
-}
-
-fn record_lane_of(record: &LaneRecord) -> &str {
-    match record {
-        LaneRecord::OperationStarted(r) => &r.base.lane,
-        LaneRecord::AbortRequested(r) => &r.base.lane,
-        LaneRecord::OperationFinished(r) => &r.base.lane,
-        LaneRecord::StepAttempt(r) => &r.base.lane,
-        LaneRecord::ToolStarted(r) => &r.base.lane,
-        LaneRecord::QueueEnqueued(r) => &r.base.lane,
-        LaneRecord::QueueCancelled(r) => &r.base.lane,
-        LaneRecord::WriteDeferred(r) => &r.base.lane,
-        LaneRecord::Usage(r) => &r.base.lane,
-    }
-}
-
-fn record_id_of(record: &LaneRecord) -> &str {
-    match record {
-        LaneRecord::OperationStarted(r) => &r.base.id,
-        LaneRecord::AbortRequested(r) => &r.base.id,
-        LaneRecord::OperationFinished(r) => &r.base.id,
-        LaneRecord::StepAttempt(r) => &r.base.id,
-        LaneRecord::ToolStarted(r) => &r.base.id,
-        LaneRecord::QueueEnqueued(r) => &r.base.id,
-        LaneRecord::QueueCancelled(r) => &r.base.id,
-        LaneRecord::WriteDeferred(r) => &r.base.id,
-        LaneRecord::Usage(r) => &r.base.id,
-    }
-}
-
-/// 对应 `InMemorySessionRepo`
-#[derive(Default)]
-pub struct InMemorySessionRepo {
-    sessions: Mutex<HashMap<String, Arc<InMemorySessionStorage>>>,
-}
-
-impl InMemorySessionRepo {
+impl MemorySessionRepo {
     pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub async fn create(&self, id: Option<&str>) -> Result<Session, SessionError> {
-        let id = id.map(|s| s.to_string()).unwrap_or_else(pi_ai::uuidv7);
-        let mut sessions = self.sessions.lock().unwrap();
-        if sessions.contains_key(&id) {
-            return Err(SessionError::new(
-                SessionErrorCode::AlreadyExists,
-                format!("Session already exists: {id}"),
-            ));
+        Self {
+            sessions: StdMutex::new(BTreeMap::new()),
+            pending_ids: StdMutex::new(Vec::new()),
         }
-        let storage = Arc::new(InMemorySessionStorage::new(SessionMetadata {
+    }
+}
+
+#[async_trait::async_trait]
+impl SessionRepo for MemorySessionRepo {
+    async fn create(
+        &self,
+        options: SessionCreateOptions,
+        _context: &Context,
+    ) -> Result<Arc<dyn Session>, String> {
+        let id = options.id.unwrap_or_else(pi_ai::uuidv7);
+        if self.sessions.lock().unwrap().contains_key(&id) {
+            return Err(format!("Session already exists: {id}"));
+        }
+        self.pending_ids.lock().unwrap().push(id.clone());
+        let metadata = SessionMetadata {
             id: id.clone(),
             created_at: pi_ai::utils::uuid::now_ms() as u64,
-            parent_session_id: None,
-        }));
-        sessions.insert(id, storage.clone());
-        Ok(Session::new(storage))
+            storage_version: MEMORY_STORAGE_VERSION,
+            cwd: None,
+            parent_session_id: options.parent_session_id,
+            legacy_parent_session_path: None,
+        };
+        let storage = Arc::new(MemoryStorage::new());
+        let session = Arc::new(StorageBackedSession::new(
+            metadata.clone(),
+            storage.clone(),
+            None,
+        ));
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(id.clone(), MemorySessionRecord { metadata, storage });
+        self.pending_ids.lock().unwrap().retain(|p| p != &id);
+        Ok(session)
     }
 
-    pub async fn open(&self, metadata: SessionMetadata) -> Result<Session, SessionError> {
-        let sessions = self.sessions.lock().unwrap();
-        let storage = sessions.get(&metadata.id).cloned().ok_or_else(|| {
-            SessionError::new(
-                SessionErrorCode::NotFound,
-                format!("Session not found: {}", metadata.id),
-            )
-        })?;
-        Ok(Session::new(storage))
+    async fn open(
+        &self,
+        metadata: SessionMetadata,
+        _context: &Context,
+    ) -> Result<Arc<dyn Session>, String> {
+        let record = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&metadata.id)
+            .cloned()
+            .ok_or_else(|| format!("Session not found: {}", metadata.id))?;
+        Ok(Arc::new(StorageBackedSession::new(
+            metadata,
+            record.storage.clone(),
+            None,
+        )))
     }
 
-    pub async fn list(&self) -> Result<Vec<SessionMetadata>, SessionError> {
-        let storages: Vec<Arc<InMemorySessionStorage>> =
-            self.sessions.lock().unwrap().values().cloned().collect();
-        let mut result = Vec::new();
-        for storage in storages {
-            result.push(storage.get_metadata().await?);
-        }
-        Ok(result)
+    async fn list(&self, _context: &Context) -> Result<Vec<SessionMetadata>, String> {
+        Ok(self
+            .sessions
+            .lock()
+            .unwrap()
+            .values()
+            .map(|r| r.metadata.clone())
+            .collect())
     }
 
-    pub async fn delete(&self, metadata: SessionMetadata) -> Result<(), SessionError> {
+    async fn delete(&self, metadata: SessionMetadata, _context: &Context) -> Result<(), String> {
         self.sessions.lock().unwrap().remove(&metadata.id);
         Ok(())
     }
 
-    /// 对应 `fork`：从 source 复制分支/tree 到新 session。
-    pub async fn fork(
+    async fn fork(
         &self,
-        source: &SessionMetadata,
-        options: &ForkOptions,
-        id: Option<&str>,
-    ) -> Result<Session, SessionError> {
-        let source_storage = {
-            let sessions = self.sessions.lock().unwrap();
-            sessions.get(&source.id).cloned().ok_or_else(|| {
-                SessionError::new(
-                    SessionErrorCode::NotFound,
-                    format!("Session not found: {}", source.id),
-                )
-            })?
-        };
-        let id = id.map(|s| s.to_string()).unwrap_or_else(pi_ai::uuidv7);
-        let mut sessions = self.sessions.lock().unwrap();
-        if sessions.contains_key(&id) {
-            return Err(SessionError::new(
-                SessionErrorCode::AlreadyExists,
-                format!("Session already exists: {id}"),
-            ));
+        source: SessionMetadata,
+        options: crate::harness::session::types::ForkOptions,
+        _context: &Context,
+    ) -> Result<Arc<dyn Session>, String> {
+        let record = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&source.id)
+            .cloned()
+            .ok_or_else(|| format!("Session not found: {}", source.id))?;
+        let source_snapshot = record.storage.capture_fork_source()?;
+        let snapshot =
+            crate::harness::session::fork::create_fork_snapshot(&source_snapshot, &options);
+        let storage = Arc::new(MemoryStorage::from_snapshot(&snapshot));
+        let id = match &options {
+            crate::harness::session::types::ForkOptions::Branch { id, .. }
+            | crate::harness::session::types::ForkOptions::Tree { id } => id.clone(),
         }
-        let storage = Arc::new(source_storage.fork(
-            SessionMetadata {
-                id: id.clone(),
-                created_at: pi_ai::utils::uuid::now_ms() as u64,
-                parent_session_id: Some(source.id.clone()),
+        .unwrap_or_else(pi_ai::uuidv7);
+        let metadata = SessionMetadata {
+            id: id.clone(),
+            created_at: pi_ai::utils::uuid::now_ms() as u64,
+            storage_version: MEMORY_STORAGE_VERSION,
+            cwd: None,
+            parent_session_id: Some(source.id.clone()),
+            legacy_parent_session_path: None,
+        };
+        self.sessions.lock().unwrap().insert(
+            id.clone(),
+            MemorySessionRecord {
+                metadata: metadata.clone(),
+                storage: storage.clone(),
             },
-            options,
-        ));
-        sessions.insert(id, storage.clone());
-        Ok(Session::new(storage))
+        );
+        Ok(Arc::new(StorageBackedSession::new(metadata, storage, None)))
     }
+}
+
+// 未使用抑制。
+#[allow(unused)]
+fn _unused(_: &CommittedWrite) -> &EntryType {
+    unimplemented!()
 }

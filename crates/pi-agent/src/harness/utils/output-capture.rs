@@ -12,7 +12,7 @@ use crate::harness::types::{
 };
 use crate::harness::utils::adaptive_publisher::{AdaptivePublisher, AdaptivePublisherSink};
 use crate::harness::utils::truncate::{
-    truncate_head, truncate_tail, TruncationOptions, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES,
+    DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncationOptions, truncate_head, truncate_tail,
 };
 
 /// 对应 `OUTPUT_MIN_EMIT_INTERVAL_MS`。
@@ -27,7 +27,9 @@ fn is_invalid_shell_output_char(c: char) -> bool {
 
 /// 对应 `sanitizeShellOutput`。
 pub fn sanitize_shell_output(text: &str) -> String {
-    text.chars().filter(|c| !is_invalid_shell_output_char(*c)).collect()
+    text.chars()
+        .filter(|c| !is_invalid_shell_output_char(*c))
+        .collect()
 }
 
 fn count_newlines(text: &str) -> usize {
@@ -229,7 +231,12 @@ impl OutputCapture {
 }
 
 fn total_lines(state: &OutputCaptureState) -> usize {
-    state.newlines + if state.ends_with_newline || state.total_bytes == 0 { 0 } else { 1 }
+    state.newlines
+        + if state.ends_with_newline || state.total_bytes == 0 {
+            0
+        } else {
+            1
+        }
 }
 
 fn append_text_inner(
@@ -282,7 +289,11 @@ pub fn apply_shell_output_update(
             metadata,
         } => {
             let base = current.map(|c| c.text.as_str()).unwrap_or("");
-            let kept = if *drop < base.len() { &base[*drop..] } else { "" };
+            let kept = if *drop < base.len() {
+                &base[*drop..]
+            } else {
+                ""
+            };
             ShellOutputView {
                 text: format!("{kept}{text}"),
                 truncation: metadata.truncation.clone(),
@@ -318,7 +329,14 @@ fn snapshot_inner(
     let truncation = ShellOutputTruncation {
         truncated,
         truncated_by: if truncated {
-            Some(if total_lines > max_lines { "lines" } else { "bytes" }.to_string())
+            Some(
+                if total_lines > max_lines {
+                    "lines"
+                } else {
+                    "bytes"
+                }
+                .to_string(),
+            )
         } else {
             None
         },

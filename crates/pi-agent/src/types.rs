@@ -30,7 +30,8 @@ pub enum ReplayPolicy {
 }
 
 /// 对应 `QueueMode = "all" | "one-at-a-time"`
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum QueueMode {
     All,
     OneAtATime,

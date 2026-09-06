@@ -1,7 +1,7 @@
 //! compaction 复刻的行为测试：重试分类 + prepareCompaction 边界。
 
 use pi_agent::harness::compaction::compaction::{DEFAULT_COMPACTION_SETTINGS, prepare_compaction};
-use pi_agent::harness::session::types::{CompactionEntry, Entry, EntryBase};
+use pi_agent::harness::session::types::{CompactionEntry, Entry, EntryBase, EntryType};
 use pi_ai::{StopReason, faux_assistant_message, is_retryable_assistant_error};
 
 #[test]
@@ -34,7 +34,8 @@ fn prepare_compaction_empty_returns_none() {
 fn prepare_compaction_skips_when_last_entry_is_compaction() {
     let compaction = Entry::Compaction(CompactionEntry {
         base: EntryBase {
-            kind: "compaction".to_string(),
+            entry_type: EntryType::Compaction,
+            custom_type: None,
             id: "c1".to_string(),
             seq: 1,
             parent_id: None,
@@ -45,6 +46,7 @@ fn prepare_compaction_skips_when_last_entry_is_compaction() {
         tokens_before: 0,
         details: None,
         usage: None,
+        from_hook: false,
     });
 
     let result = prepare_compaction(&[compaction], &DEFAULT_COMPACTION_SETTINGS).unwrap();

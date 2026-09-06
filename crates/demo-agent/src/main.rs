@@ -17,7 +17,9 @@ use pi_agent::harness::compaction::compaction::{
     prepare_compaction, should_compact,
 };
 use pi_agent::harness::session::context::build_session_context;
-use pi_agent::harness::session::types::{CompactionEntry, Entry, EntryBase, MessageEntry};
+use pi_agent::harness::session::types::{
+    CompactionEntry, Entry, EntryBase, EntryType, MessageEntry,
+};
 use pi_agent::harness::tools::{
     create_bash_tool, create_edit_tool, create_read_tool, create_write_tool,
 };
@@ -229,8 +231,13 @@ async fn maybe_compact(
     model: &pi_ai::Model,
 ) {
     let branch = session_log.get_branch();
-    let session_ctx = build_session_context(&branch);
-    let tokens = estimate_context_tokens(&session_ctx.messages).tokens;
+    let session_ctx = build_session_context(
+        &branch,
+        None,
+        &pi_agent::harness::context::BACKGROUND_CONTEXT,
+    )
+    .await;
+    let tokens = estimate_context_tokens(&session_ctx).tokens;
 
     if !should_compact(tokens, model.context_window, &DEFAULT_COMPACTION_SETTINGS) {
         return;
@@ -258,11 +265,16 @@ async fn maybe_compact(
         Ok(result) => {
             session_log.append_compaction(result);
             let new_branch = session_log.get_branch();
-            let new_ctx = build_session_context(&new_branch);
+            let new_ctx = build_session_context(
+                &new_branch,
+                None,
+                &pi_agent::harness::context::BACKGROUND_CONTEXT,
+            )
+            .await;
             // 压缩后 retained_tail 里 assistant 的 usage 反映的是压缩前的 context 大小，
             // 不能再用 usage 报告值估算；改用启发式 estimateTokens 重新估算。
-            let after: u64 = new_ctx.messages.iter().map(estimate_tokens).sum();
-            agent.set_messages(new_ctx.messages);
+            let after: u64 = new_ctx.iter().map(estimate_tokens).sum();
+            agent.set_messages(new_ctx);
             println!("[compaction] 完成，压缩后约 {after} tokens。");
         }
         Err(err) => {
@@ -299,7 +311,8 @@ impl SessionLog {
         let id = uuidv7();
         let entry = Entry::Message(MessageEntry {
             base: EntryBase {
-                kind: "message".to_string(),
+                entry_type: EntryType::Message,
+                custom_type: None,
                 id: id.clone(),
                 seq: inner.seq,
                 parent_id: inner.leaf_id.clone(),
@@ -319,7 +332,8 @@ impl SessionLog {
         let details = serde_json::to_value(&result.details).ok();
         let entry = Entry::Compaction(CompactionEntry {
             base: EntryBase {
-                kind: "compaction".to_string(),
+                entry_type: EntryType::Compaction,
+                custom_type: None,
                 id: id.clone(),
                 seq: inner.seq,
                 parent_id: inner.leaf_id.clone(),
@@ -330,6 +344,7 @@ impl SessionLog {
             tokens_before: result.tokens_before,
             details,
             usage: result.usage,
+            from_hook: false,
         });
         inner.leaf_id = Some(id.clone());
         inner.by_id.insert(id, entry);
@@ -353,15 +368,7 @@ impl SessionLog {
 }
 
 fn entry_parent_id(entry: &Entry) -> Option<String> {
-    match entry {
-        Entry::Message(e) => e.base.parent_id.clone(),
-        Entry::ModelChange(e) => e.base.parent_id.clone(),
-        Entry::ThinkingLevelChange(e) => e.base.parent_id.clone(),
-        Entry::ActiveToolsChange(e) => e.base.parent_id.clone(),
-        Entry::Compaction(e) => e.base.parent_id.clone(),
-        Entry::BranchSummary(e) => e.base.parent_id.clone(),
-        Entry::Custom(e) => e.base.parent_id.clone(),
-    }
+    entry.parent_id().map(String::from)
 }
 
 /// 构造审批门回调：每个工具调用前提示 Y/n；拒绝仅阻止当前工具，不终止 turn。
@@ -438,8 +445,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn compaction_entry_truncates_context() {
+    #[tokio::test]
+    async fn compaction_entry_truncates_context() {
         let log = SessionLog::new();
         log.append_message(user_msg("old"));
         log.append_message(user_msg("recent"));
@@ -455,12 +462,14 @@ mod tests {
         });
 
         let branch = log.get_branch();
-        let ctx = build_session_context(&branch);
+        let ctx = build_session_context(
+            &branch,
+            None,
+            &pi_agent::harness::context::BACKGROUND_CONTEXT,
+        )
+        .await;
         // 只保留最后一个 compaction 展开：summary + retained_tail，旧历史被截断。
-        assert_eq!(ctx.messages.len(), 2);
-        assert!(matches!(
-            &ctx.messages[0],
-            AgentMessage::CompactionSummary(_)
-        ));
+        assert_eq!(ctx.len(), 2);
+        assert!(matches!(&ctx[0], AgentMessage::CompactionSummary(_)));
     }
 }

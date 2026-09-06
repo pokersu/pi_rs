@@ -9,7 +9,6 @@ pub mod events;
 pub mod messages;
 #[path = "prompt-templates.rs"]
 pub mod prompt_templates;
-pub mod reducer;
 pub mod result;
 pub mod session;
 pub mod skills;

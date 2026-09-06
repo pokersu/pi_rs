@@ -16,13 +16,14 @@ use crate::harness::compaction::utils::{
 use crate::harness::messages::{
     convert_to_llm, create_branch_summary_message, create_compaction_summary_message,
 };
-use crate::harness::session::context::build_session_context;
-use crate::harness::session::types::{Entry, EntryBase, MessageEntry};
+use crate::harness::session::context::{build_context_entries, session_entry_to_context_messages};
+use crate::harness::session::types::{Entry, EntryBase, EntryType, MessageEntry};
 use crate::harness::types::{CompactionError, CompactionErrorCode};
 use crate::types::{AgentMessage, ThinkingLevel, to_ai_thinking_level};
 
 /// 对应 `CompactionSettings`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompactionSettings {
     pub enabled: bool,
     pub reserve_tokens: u64,
@@ -699,7 +700,8 @@ pub fn prepare_compaction(
             .map(|(index, message)| {
                 Entry::Message(MessageEntry {
                     base: EntryBase {
-                        kind: "message".to_string(),
+                        entry_type: EntryType::Message,
+                        custom_type: None,
                         id: format!("{}:retained:{index}", prev.base.id),
                         seq: prev.base.seq,
                         parent_id: if index == 0 {
@@ -719,8 +721,14 @@ pub fn prepare_compaction(
     }
     let boundary_end = compactable_entries.len();
 
-    let tokens_before =
-        estimate_context_tokens(&build_session_context(path_entries).messages).tokens;
+    let tokens_before = {
+        let entries = build_context_entries(path_entries);
+        let messages: Vec<AgentMessage> = entries
+            .iter()
+            .flat_map(session_entry_to_context_messages)
+            .collect();
+        estimate_context_tokens(&messages).tokens
+    };
 
     let cut_point = find_cut_point(
         &compactable_entries,
