@@ -1,12 +1,16 @@
 //! Rust 翻译自 packages/agent/src/harness/tools/bash.ts（含流式 onUpdate + 100ms 节流）
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use pi_ai::{TextContent, TextKind, TextOrImageContent};
 
+use crate::harness::context::{BACKGROUND_CONTEXT, Context, with_abort_signal};
 use crate::harness::result::get_or_throw;
-use crate::harness::types::{ExecutionEnv, ShellChunkCallback, ShellExecOptions};
+use crate::harness::types::{
+    ExecutionEnv, ShellExecOptions, ShellOutputCaptureOptions, ShellOutputLimits,
+    ShellOutputRetention, ShellOutputUpdate, ShellOutputUpdateCallback,
+};
 use crate::types::{AgentTool, AgentToolResult};
 
 const DEFAULT_MAX_LINES: usize = 2000;
@@ -49,35 +53,47 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
                     panic!("Invalid timeout: must be a finite number of seconds");
                 }
 
-                // 进度 channel：读线程 -> 节流上报 task。
-                let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                let context = match signal {
+                    Some(s) => with_abort_signal(&s, &BACKGROUND_CONTEXT),
+                    None => (*BACKGROUND_CONTEXT).clone(),
+                };
 
-                let progress_handle = on_update.map(|callback| {
-                    tokio::spawn(async move {
-                        let mut rx = rx;
-                        let mut accumulated = String::new();
-                        let mut last = Instant::now();
-                        callback(empty_update());
-                        while let Some(chunk) = rx.recv().await {
-                            accumulated.push_str(&chunk);
+                let accumulated = Arc::new(Mutex::new(String::new()));
+                let acc_for_cb = Arc::clone(&accumulated);
+                let last_update = Arc::new(Mutex::new(Instant::now()));
+                let on_update_shared = Arc::new(Mutex::new(on_update));
+
+                let on_update_cb: ShellOutputUpdateCallback = {
+                    let last_update = Arc::clone(&last_update);
+                    let on_update_shared = Arc::clone(&on_update_shared);
+                    Box::new(move |update: &ShellOutputUpdate, _ctx: &Context| {
+                        let text = match update {
+                            ShellOutputUpdate::Replace { output } => output.text.clone(),
+                            ShellOutputUpdate::Append { text, .. }
+                            | ShellOutputUpdate::Slide { text, .. } => text.clone(),
+                            ShellOutputUpdate::Metadata { .. } => String::new(),
+                        };
+                        if text.is_empty() {
+                            return;
+                        }
+                        let current = {
+                            let mut acc = acc_for_cb.lock().unwrap();
+                            if matches!(update, ShellOutputUpdate::Replace { .. }) {
+                                *acc = text;
+                            } else {
+                                acc.push_str(&text);
+                            }
+                            acc.clone()
+                        };
+                        let callback = on_update_shared.lock().unwrap();
+                        if let Some(callback) = callback.as_ref() {
+                            let mut last = last_update.lock().unwrap();
                             if last.elapsed() >= Duration::from_millis(BASH_UPDATE_THROTTLE_MS) {
-                                last = Instant::now();
-                                callback(text_update(&accumulated));
+                                *last = Instant::now();
+                                drop(last);
+                                callback(text_update(&current));
                             }
                         }
-                    })
-                });
-
-                let on_stdout: ShellChunkCallback = {
-                    let tx = tx.clone();
-                    Box::new(move |chunk: &str| {
-                        let _ = tx.send(chunk.to_string());
-                    })
-                };
-                let on_stderr: ShellChunkCallback = {
-                    let tx = tx.clone();
-                    Box::new(move |chunk: &str| {
-                        let _ = tx.send(chunk.to_string());
                     })
                 };
 
@@ -87,53 +103,32 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
                         ShellExecOptions {
                             cwd: Some(env.cwd().to_string()),
                             timeout,
-                            abort_signal: signal,
-                            on_stdout: Some(on_stdout),
-                            on_stderr: Some(on_stderr),
+                            capture: Some(ShellOutputCaptureOptions {
+                                limits: ShellOutputLimits {
+                                    max_bytes: DEFAULT_MAX_BYTES,
+                                    max_lines: DEFAULT_MAX_LINES,
+                                    retain: Some(ShellOutputRetention::Tail),
+                                },
+                                spill: Some(true),
+                            }),
+                            on_update: Some(on_update_cb),
                             ..Default::default()
                         },
+                        &context,
                     )
                     .await,
                 );
 
-                // 关闭 channel，等节流 task 结束。
-                drop(tx);
-                if let Some(handle) = progress_handle {
-                    let _ = handle.await;
-                }
-
+                let output = accumulated.lock().unwrap().clone();
                 if result.exit_code != 0 {
-                    panic!(
-                        "Command exited with code {}\nstdout: {}\nstderr: {}",
-                        result.exit_code, result.stdout, result.stderr
-                    );
+                    panic!("Command exited with code {}\n{}", result.exit_code, output);
                 }
 
-                let mut output = if result.stdout.is_empty() {
-                    result.stderr.clone()
-                } else if result.stderr.is_empty() {
-                    result.stdout.clone()
+                let output = if output.is_empty() {
+                    "(no output)".to_string()
                 } else {
-                    format!("{}\n{}", result.stdout, result.stderr)
+                    output
                 };
-                if output.is_empty() {
-                    output = "(no output)".to_string();
-                }
-
-                // 截断到行数/字节限制。
-                let lines: Vec<&str> = output.lines().collect();
-                if lines.len() > DEFAULT_MAX_LINES {
-                    let start = lines.len() - DEFAULT_MAX_LINES;
-                    output = format!(
-                        "[Showing last {DEFAULT_MAX_LINES} lines of {}]\n{}",
-                        lines.len(),
-                        lines[start..].join("\n")
-                    );
-                }
-                if output.len() > DEFAULT_MAX_BYTES {
-                    output = format!("[Truncated to {}KB]\n", DEFAULT_MAX_BYTES / 1024)
-                        + &output[..DEFAULT_MAX_BYTES];
-                }
 
                 AgentToolResult {
                     content: vec![TextOrImageContent::Text(TextContent {
@@ -150,16 +145,6 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
         }),
         execution_mode: None,
         replay: None,
-    }
-}
-
-fn empty_update() -> AgentToolResult {
-    AgentToolResult {
-        content: Vec::new(),
-        details: serde_json::Value::Null,
-        usage: None,
-        added_tool_names: None,
-        terminate: false,
     }
 }
 

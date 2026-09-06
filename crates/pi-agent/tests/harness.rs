@@ -17,9 +17,12 @@ fn text_of(content: &[TextOrImageContent]) -> String {
 }
 
 async fn temp_dir(env: &Arc<NodeExecutionEnv>) -> String {
-    env.create_temp_dir(Some("pi-agent-test-"), None)
-        .await
-        .unwrap()
+    env.create_temp_dir(
+        Some("pi-agent-test-"),
+        &pi_agent::harness::context::BACKGROUND_CONTEXT,
+    )
+    .await
+    .unwrap()
 }
 
 #[tokio::test]
@@ -29,10 +32,26 @@ async fn node_env_writes_and_reads() {
     ));
     let dir = temp_dir(&env).await;
     let file = format!("{dir}/test.txt");
-    env.write_file(&file, b"hello\nworld", None).await.unwrap();
-    let text = env.read_text_file(&file, None).await.unwrap();
+    env.write_file(
+        &file,
+        b"hello\nworld",
+        &pi_agent::harness::context::BACKGROUND_CONTEXT,
+    )
+    .await
+    .unwrap();
+    let text = env
+        .read_text_file(&file, &pi_agent::harness::context::BACKGROUND_CONTEXT)
+        .await
+        .unwrap();
     assert_eq!(text, "hello\nworld");
-    env.remove(&dir, true, true, None).await.unwrap();
+    env.remove(
+        &dir,
+        true,
+        true,
+        &pi_agent::harness::context::BACKGROUND_CONTEXT,
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -42,9 +61,13 @@ async fn read_tool_reads_text_file() {
     ));
     let dir = temp_dir(&env).await;
     let file = format!("{dir}/test.txt");
-    env.write_file(&file, b"line1\nline2\nline3", None)
-        .await
-        .unwrap();
+    env.write_file(
+        &file,
+        b"line1\nline2\nline3",
+        &pi_agent::harness::context::BACKGROUND_CONTEXT,
+    )
+    .await
+    .unwrap();
 
     let tool = create_read_tool(env.clone());
     let result = (tool.execute)(
@@ -58,7 +81,14 @@ async fn read_tool_reads_text_file() {
     assert!(text.contains("line1"));
     assert!(text.contains("line3"));
 
-    env.remove(&dir, true, true, None).await.unwrap();
+    env.remove(
+        &dir,
+        true,
+        true,
+        &pi_agent::harness::context::BACKGROUND_CONTEXT,
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -68,7 +98,13 @@ async fn read_tool_supports_offset() {
     ));
     let dir = temp_dir(&env).await;
     let file = format!("{dir}/test.txt");
-    env.write_file(&file, b"a\nb\nc\nd", None).await.unwrap();
+    env.write_file(
+        &file,
+        b"a\nb\nc\nd",
+        &pi_agent::harness::context::BACKGROUND_CONTEXT,
+    )
+    .await
+    .unwrap();
 
     let tool = create_read_tool(env.clone());
     let result = (tool.execute)(
@@ -82,7 +118,14 @@ async fn read_tool_supports_offset() {
     assert!(text.contains('c'));
     assert!(!text.contains('d'));
 
-    env.remove(&dir, true, true, None).await.unwrap();
+    env.remove(
+        &dir,
+        true,
+        true,
+        &pi_agent::harness::context::BACKGROUND_CONTEXT,
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -103,10 +146,20 @@ async fn write_tool_writes_file() {
     .await;
     assert!(text_of(&result.content).contains("Successfully wrote"));
 
-    let read_back = env.read_text_file(&file, None).await.unwrap();
+    let read_back = env
+        .read_text_file(&file, &pi_agent::harness::context::BACKGROUND_CONTEXT)
+        .await
+        .unwrap();
     assert_eq!(read_back, "written content");
 
-    env.remove(&dir, true, true, None).await.unwrap();
+    env.remove(
+        &dir,
+        true,
+        true,
+        &pi_agent::harness::context::BACKGROUND_CONTEXT,
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]

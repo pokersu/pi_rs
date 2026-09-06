@@ -50,13 +50,20 @@ async fn edit_tool_edits_file() {
         std::env::temp_dir().to_string_lossy().to_string(),
     ));
     let dir = env
-        .create_temp_dir(Some("pi-agent-edit-"), None)
+        .create_temp_dir(
+            Some("pi-agent-edit-"),
+            &pi_agent::harness::context::BACKGROUND_CONTEXT,
+        )
         .await
         .unwrap();
     let file = format!("{dir}/target.txt");
-    env.write_file(&file, b"fn main() {\n    println!(\"old\");\n}", None)
-        .await
-        .unwrap();
+    env.write_file(
+        &file,
+        b"fn main() {\n    println!(\"old\");\n}",
+        &pi_agent::harness::context::BACKGROUND_CONTEXT,
+    )
+    .await
+    .unwrap();
 
     let tool = create_edit_tool(env.clone());
     let result = (tool.execute)(
@@ -73,8 +80,18 @@ async fn edit_tool_edits_file() {
     assert!(text_of(&result.content).contains("Successfully replaced 1 block(s)"));
     assert!(result.details["patch"].as_str().unwrap().contains("new"));
 
-    let read_back = env.read_text_file(&file, None).await.unwrap();
+    let read_back = env
+        .read_text_file(&file, &pi_agent::harness::context::BACKGROUND_CONTEXT)
+        .await
+        .unwrap();
     assert!(read_back.contains("println!(\"new\")"));
 
-    env.remove(&dir, true, true, None).await.unwrap();
+    env.remove(
+        &dir,
+        true,
+        true,
+        &pi_agent::harness::context::BACKGROUND_CONTEXT,
+    )
+    .await
+    .unwrap();
 }

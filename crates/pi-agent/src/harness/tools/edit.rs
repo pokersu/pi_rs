@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use pi_ai::{AbortSignal, TextContent, TextKind, TextOrImageContent};
 
+use crate::harness::context::{BACKGROUND_CONTEXT, with_abort_signal};
 use crate::harness::result::get_or_throw;
 use crate::harness::tools::edit_diff::{
     Edit, apply_edits_to_normalized_content, detect_line_ending, generate_diff_string,
@@ -77,28 +78,34 @@ pub fn create_edit_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
 		execute: Arc::new(move |_id, params, signal, _on_update| {
 			let env = env.clone();
 			Box::pin(async move {
+				let context = match signal {
+					Some(s) => with_abort_signal(&s, &BACKGROUND_CONTEXT),
+					None => (*BACKGROUND_CONTEXT).clone(),
+				};
 				let (path, edits) = validate_edit_input(&params);
-				let absolute = resolve_tool_path(&env, &path, signal.as_ref()).await;
+				let absolute = resolve_tool_path(&env, &path, &context).await;
 				let absolute_for_closure = absolute.clone();
 				let env_for_closure = env.clone();
-				with_file_mutation_queue(&env, &absolute, move || {
+				let context_for_closure = context.clone();
+				with_file_mutation_queue(&env, &absolute, &context, move || {
+					let context = context_for_closure;
 					let env = env_for_closure;
 					let path = path.clone();
 					let edits = edits.clone();
 					let absolute = absolute_for_closure;
 					Box::pin(async move {
-						if signal.as_ref().map(|s| s.aborted()).unwrap_or(false) {
+						if context.abort_signal().map(|s| s.aborted()).unwrap_or(false) {
 							panic!("Operation aborted");
 						}
-						let info = get_or_throw(env.file_info(&absolute, signal.as_ref()).await);
+						let info = get_or_throw(env.file_info(&absolute, &context).await);
 						if info.kind != crate::harness::types::FileKind::File
 							&& info.kind != crate::harness::types::FileKind::Symlink
 						{
 							panic!("Could not edit file: {path}. Path is not a file.");
 						}
 
-						let read_result = get_or_throw(env.read_text_file(&absolute, signal.as_ref()).await);
-						if signal.as_ref().map(|s| s.aborted()).unwrap_or(false) {
+						let read_result = get_or_throw(env.read_text_file(&absolute, &context).await);
+						if context.abort_signal().map(|s| s.aborted()).unwrap_or(false) {
 							panic!("Operation aborted");
 						}
 
@@ -106,13 +113,13 @@ pub fn create_edit_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
 						let original_ending = detect_line_ending(&content);
 						let normalized_content = normalize_to_lf(&content);
 						let applied = apply_edits_to_normalized_content(&normalized_content, &edits, &path);
-						if signal.as_ref().map(|s| s.aborted()).unwrap_or(false) {
+						if context.abort_signal().map(|s| s.aborted()).unwrap_or(false) {
 							panic!("Operation aborted");
 						}
 
 						let final_content = format!("{}{}", bom, restore_line_endings(&applied.new_content, original_ending));
-						get_or_throw(env.write_file(&absolute, final_content.as_bytes(), signal.as_ref()).await);
-						if signal.as_ref().map(|s| s.aborted()).unwrap_or(false) {
+						get_or_throw(env.write_file(&absolute, final_content.as_bytes(), &context).await);
+						if context.abort_signal().map(|s| s.aborted()).unwrap_or(false) {
 							panic!("Operation aborted");
 						}
 

@@ -7,6 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::harness::context::Context;
 use crate::harness::types::{ExecutionEnv, Skill};
 
 const MAX_NAME_LENGTH: usize = 64;
@@ -61,11 +62,12 @@ pub fn format_skill_invocation(skill: &Skill, additional_instructions: Option<&s
 pub async fn load_skills(
     env: &Arc<dyn ExecutionEnv>,
     dirs: &[String],
+    context: &Context,
 ) -> (Vec<Skill>, Vec<SkillDiagnostic>) {
     let mut skills = Vec::new();
     let mut diagnostics = Vec::new();
     for dir in dirs {
-        if let Ok(info) = env.file_info(dir, None).await
+        if let Ok(info) = env.file_info(dir, context).await
             && info.kind == crate::harness::types::FileKind::Directory
         {
             load_skills_from_dir(
@@ -75,6 +77,7 @@ pub async fn load_skills(
                 &info.path,
                 &mut skills,
                 &mut diagnostics,
+                context,
             )
             .await;
         }
@@ -88,11 +91,12 @@ pub async fn load_sourced_skills<T: Clone>(
     env: &Arc<dyn ExecutionEnv>,
     inputs: &[(String, T)],
     map_skill: Option<&(dyn Fn(&Skill, &T) -> Skill + Sync)>,
+    context: &Context,
 ) -> (Vec<(Skill, T)>, Vec<(SkillDiagnostic, T)>) {
     let mut skills = Vec::new();
     let mut diagnostics = Vec::new();
     for (path, source) in inputs {
-        let (loaded, diags) = load_skills(env, std::slice::from_ref(path)).await;
+        let (loaded, diags) = load_skills(env, std::slice::from_ref(path), context).await;
         for skill in loaded {
             let mapped = match map_skill {
                 Some(map) => map(&skill, source),
@@ -114,8 +118,18 @@ async fn load_skills_from_dir(
     _root_dir: &str,
     skills: &mut Vec<Skill>,
     diagnostics: &mut Vec<SkillDiagnostic>,
+    context: &Context,
 ) {
-    load_skills_from_dir_inner(env, dir, include_root_files, _root_dir, skills, diagnostics).await
+    load_skills_from_dir_inner(
+        env,
+        dir,
+        include_root_files,
+        _root_dir,
+        skills,
+        diagnostics,
+        context,
+    )
+    .await
 }
 
 fn load_skills_from_dir_inner<'a>(
@@ -125,9 +139,10 @@ fn load_skills_from_dir_inner<'a>(
     _root_dir: &'a str,
     skills: &'a mut Vec<Skill>,
     diagnostics: &'a mut Vec<SkillDiagnostic>,
+    context: &'a Context,
 ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
     Box::pin(async move {
-        let entries = match env.list_dir(dir, None).await {
+        let entries = match env.list_dir(dir, context).await {
             Ok(entries) => entries,
             Err(_) => return,
         };
@@ -141,7 +156,7 @@ fn load_skills_from_dir_inner<'a>(
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
             if let Some(skill) =
-                load_skill_from_file(env, &entry.path, &parent_name, diagnostics).await
+                load_skill_from_file(env, &entry.path, &parent_name, diagnostics, context).await
             {
                 skills.push(skill);
             }
@@ -163,6 +178,7 @@ fn load_skills_from_dir_inner<'a>(
                         _root_dir,
                         skills,
                         diagnostics,
+                        context,
                     )
                     .await;
                 }
@@ -175,7 +191,8 @@ fn load_skills_from_dir_inner<'a>(
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default();
                     if let Some(skill) =
-                        load_skill_from_file(env, &entry.path, &parent_name, diagnostics).await
+                        load_skill_from_file(env, &entry.path, &parent_name, diagnostics, context)
+                            .await
                     {
                         skills.push(skill);
                     }
@@ -191,10 +208,11 @@ async fn load_skill_from_file(
     file_path: &str,
     parent_dir_name: &str,
     diagnostics: &mut Vec<SkillDiagnostic>,
+    context: &Context,
 ) -> Option<Skill> {
     let is_declared_skill =
         file_path.trim_end_matches('/').split('/').next_back() == Some("SKILL.md");
-    let raw_content = match env.read_text_file(file_path, None).await {
+    let raw_content = match env.read_text_file(file_path, context).await {
         Ok(content) => content,
         Err(e) => {
             diagnostics.push(SkillDiagnostic {

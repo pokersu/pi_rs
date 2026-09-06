@@ -47,7 +47,7 @@ impl JsonlSessionRepo {
 
     async fn root(&self, context: &Context) -> Result<String, String> {
         self.file_system
-            .absolute_path(&self.sessions_root_input, context.abort_signal())
+            .absolute_path(&self.sessions_root_input, context)
             .await
             .map_err(|e| {
                 format!(
@@ -66,10 +66,7 @@ impl JsonlSessionRepo {
         let root = self.root(context).await?;
         let directory = self
             .file_system
-            .join_path(
-                &[&root, &session_directory_name(&metadata.cwd)],
-                context.abort_signal(),
-            )
+            .join_path(&[&root, &session_directory_name(&metadata.cwd)], context)
             .await
             .map_err(|e| e.message)?;
         self.file_system
@@ -78,7 +75,7 @@ impl JsonlSessionRepo {
                     &directory,
                     &session_file_name(metadata.base.created_at, &metadata.base.id),
                 ],
-                context.abort_signal(),
+                context,
             )
             .await
             .map_err(|e| e.message)
@@ -107,20 +104,14 @@ impl SessionRepo for JsonlSessionRepo {
             .file_system
             .join_path(
                 &[&root, &session_directory_name(&create_options.cwd)],
-                context.abort_signal(),
+                context,
             )
             .await
             .map_err(|e| e.message)?;
-        let _ = self
-            .file_system
-            .create_dir(&directory, true, context.abort_signal())
-            .await;
+        let _ = self.file_system.create_dir(&directory, true, context).await;
         let path = self
             .file_system
-            .join_path(
-                &[&directory, &session_file_name(created_at, &id)],
-                context.abort_signal(),
-            )
+            .join_path(&[&directory, &session_file_name(created_at, &id)], context)
             .await
             .map_err(|e| e.message)?;
 
@@ -229,10 +220,7 @@ impl SessionRepo for JsonlSessionRepo {
             let root = self.root(context).await?;
             let directory = self
                 .file_system
-                .join_path(
-                    &[&root, &session_directory_name(cwd)],
-                    context.abort_signal(),
-                )
+                .join_path(&[&root, &session_directory_name(cwd)], context)
                 .await
                 .map_err(|e| e.message)?;
             let path = self
@@ -242,14 +230,11 @@ impl SessionRepo for JsonlSessionRepo {
                         &directory,
                         &session_file_name(metadata.created_at, &metadata.id),
                     ],
-                    context.abort_signal(),
+                    context,
                 )
                 .await
                 .map_err(|e| e.message)?;
-            let _ = self
-                .file_system
-                .remove(&path, false, false, context.abort_signal())
-                .await;
+            let _ = self.file_system.remove(&path, false, false, context).await;
         }
         Ok(())
     }

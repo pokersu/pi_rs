@@ -102,7 +102,7 @@ impl JsonlStorage {
         let content = serialize_storage(&header, &transactions);
         options
             .file_system
-            .write_file(&options.path, content.as_bytes(), context.abort_signal())
+            .write_file(&options.path, content.as_bytes(), context)
             .await
             .map_err(|e| {
                 format!(
@@ -124,7 +124,7 @@ impl JsonlStorage {
     pub async fn open(options: JsonlStorageOptions, context: &Context) -> Result<Self, String> {
         let content = options
             .file_system
-            .read_text_file(&options.path, context.abort_signal())
+            .read_text_file(&options.path, context)
             .await
             .map_err(|e| {
                 format!(
@@ -183,7 +183,7 @@ impl JsonlStorage {
                 .write_file(
                     &options.path,
                     format!("{}\n", lines.join("\n")).as_bytes(),
-                    context.abort_signal(),
+                    context,
                 )
                 .await;
         }
@@ -216,11 +216,7 @@ impl Storage for JsonlStorage {
             let line = serde_json::to_string(&prepared.writes).map_err(|e| e.to_string())?;
             self.options
                 .file_system
-                .append_file(
-                    &self.options.path,
-                    format!("{line}\n").as_bytes(),
-                    context.abort_signal(),
-                )
+                .append_file(&self.options.path, format!("{line}\n").as_bytes(), context)
                 .await
                 .map_err(|e| {
                     format!(

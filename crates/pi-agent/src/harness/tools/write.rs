@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use pi_ai::{AbortSignal, TextContent, TextKind, TextOrImageContent};
 
+use crate::harness::context::{BACKGROUND_CONTEXT, with_abort_signal};
 use crate::harness::result::get_or_throw;
 use crate::harness::types::ExecutionEnv;
 use crate::types::{AgentTool, AgentToolResult};
@@ -28,11 +29,15 @@ pub fn create_write_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
 		execute: Arc::new(move |_id, params, signal, _on_update| {
 			let env = env.clone();
 			Box::pin(async move {
+				let context = match signal {
+					Some(s) => with_abort_signal(&s, &BACKGROUND_CONTEXT),
+					None => (*BACKGROUND_CONTEXT).clone(),
+				};
 				let path = params.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
 				let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
-				let absolute = get_or_throw(env.absolute_path(&path, signal.as_ref()).await);
-				get_or_throw(env.write_file(&absolute, content.as_bytes(), signal.as_ref()).await);
-				if signal.as_ref().map(|s| s.aborted()).unwrap_or(false) {
+				let absolute = get_or_throw(env.absolute_path(&path, &context).await);
+				get_or_throw(env.write_file(&absolute, content.as_bytes(), &context).await);
+				if context.abort_signal().map(|s| s.aborted()).unwrap_or(false) {
 					panic!("Operation aborted");
 				}
 				AgentToolResult {

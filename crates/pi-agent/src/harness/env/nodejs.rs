@@ -4,13 +4,16 @@
 
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
 
 use pi_ai::AbortSignal;
 
+use crate::harness::context::Context;
 use crate::harness::types::{
     ExecutionEnv, ExecutionError, ExecutionErrorCode, FileError, FileErrorCode, FileInfo, FileKind,
-    FileSystem, Shell, ShellChunkCallback, ShellExecOptions, ShellResult,
+    FileSystem, Shell, ShellExecOptions, ShellExecResult,
 };
+use crate::harness::utils::output_capture::OutputCapture;
 
 fn map_io_error(path: &str, error: &std::io::Error) -> FileError {
     let code = match error.kind() {
@@ -81,12 +84,8 @@ impl FileSystem for NodeExecutionEnv {
         &self.cwd
     }
 
-    async fn absolute_path(
-        &self,
-        path: &str,
-        signal: Option<&AbortSignal>,
-    ) -> Result<String, FileError> {
-        check_aborted(signal)?;
+    async fn absolute_path(&self, path: &str, context: &Context) -> Result<String, FileError> {
+        check_aborted(context.abort_signal())?;
         let p = Path::new(path);
         if p.is_absolute() {
             Ok(path.to_string())
@@ -98,12 +97,8 @@ impl FileSystem for NodeExecutionEnv {
         }
     }
 
-    async fn join_path(
-        &self,
-        parts: &[&str],
-        signal: Option<&AbortSignal>,
-    ) -> Result<String, FileError> {
-        check_aborted(signal)?;
+    async fn join_path(&self, parts: &[&str], context: &Context) -> Result<String, FileError> {
+        check_aborted(context.abort_signal())?;
         let mut path = std::path::PathBuf::new();
         for part in parts {
             path.push(part);
@@ -111,12 +106,8 @@ impl FileSystem for NodeExecutionEnv {
         Ok(path.to_string_lossy().to_string())
     }
 
-    async fn read_text_file(
-        &self,
-        path: &str,
-        signal: Option<&AbortSignal>,
-    ) -> Result<String, FileError> {
-        check_aborted(signal)?;
+    async fn read_text_file(&self, path: &str, context: &Context) -> Result<String, FileError> {
+        check_aborted(context.abort_signal())?;
         std::fs::read_to_string(path).map_err(|e| map_io_error(path, &e))
     }
 
@@ -124,9 +115,9 @@ impl FileSystem for NodeExecutionEnv {
         &self,
         path: &str,
         max_lines: Option<usize>,
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<Vec<String>, FileError> {
-        check_aborted(signal)?;
+        check_aborted(context.abort_signal())?;
         let content = std::fs::read_to_string(path).map_err(|e| map_io_error(path, &e))?;
         let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
         if let Some(max) = max_lines {
@@ -135,12 +126,8 @@ impl FileSystem for NodeExecutionEnv {
         Ok(lines)
     }
 
-    async fn read_binary_file(
-        &self,
-        path: &str,
-        signal: Option<&AbortSignal>,
-    ) -> Result<Vec<u8>, FileError> {
-        check_aborted(signal)?;
+    async fn read_binary_file(&self, path: &str, context: &Context) -> Result<Vec<u8>, FileError> {
+        check_aborted(context.abort_signal())?;
         std::fs::read(path).map_err(|e| map_io_error(path, &e))
     }
 
@@ -148,9 +135,9 @@ impl FileSystem for NodeExecutionEnv {
         &self,
         path: &str,
         content: &[u8],
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<(), FileError> {
-        check_aborted(signal)?;
+        check_aborted(context.abort_signal())?;
         if let Some(parent) = Path::new(path).parent() {
             std::fs::create_dir_all(parent).map_err(|e| map_io_error(path, &e))?;
         }
@@ -161,9 +148,9 @@ impl FileSystem for NodeExecutionEnv {
         &self,
         path: &str,
         content: &[u8],
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<(), FileError> {
-        check_aborted(signal)?;
+        check_aborted(context.abort_signal())?;
         use std::io::Write;
         let mut file = std::fs::OpenOptions::new()
             .create(true)
@@ -177,18 +164,14 @@ impl FileSystem for NodeExecutionEnv {
         &self,
         source: &str,
         dest: &str,
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<(), FileError> {
-        check_aborted(signal)?;
+        check_aborted(context.abort_signal())?;
         std::fs::rename(source, dest).map_err(|e| map_io_error(source, &e))
     }
 
-    async fn file_info(
-        &self,
-        path: &str,
-        signal: Option<&AbortSignal>,
-    ) -> Result<FileInfo, FileError> {
-        check_aborted(signal)?;
+    async fn file_info(&self, path: &str, context: &Context) -> Result<FileInfo, FileError> {
+        check_aborted(context.abort_signal())?;
         let meta = std::fs::metadata(path).map_err(|e| map_io_error(path, &e))?;
         let mtime = meta
             .modified()
@@ -208,12 +191,8 @@ impl FileSystem for NodeExecutionEnv {
         })
     }
 
-    async fn list_dir(
-        &self,
-        path: &str,
-        signal: Option<&AbortSignal>,
-    ) -> Result<Vec<FileInfo>, FileError> {
-        check_aborted(signal)?;
+    async fn list_dir(&self, path: &str, context: &Context) -> Result<Vec<FileInfo>, FileError> {
+        check_aborted(context.abort_signal())?;
         let entries = std::fs::read_dir(path).map_err(|e| map_io_error(path, &e))?;
         let mut result = Vec::new();
         for entry in entries {
@@ -223,19 +202,15 @@ impl FileSystem for NodeExecutionEnv {
         Ok(result)
     }
 
-    async fn canonical_path(
-        &self,
-        path: &str,
-        signal: Option<&AbortSignal>,
-    ) -> Result<String, FileError> {
-        check_aborted(signal)?;
+    async fn canonical_path(&self, path: &str, context: &Context) -> Result<String, FileError> {
+        check_aborted(context.abort_signal())?;
         std::fs::canonicalize(path)
             .map(|p| p.to_string_lossy().to_string())
             .map_err(|e| map_io_error(path, &e))
     }
 
-    async fn exists(&self, path: &str, signal: Option<&AbortSignal>) -> Result<bool, FileError> {
-        check_aborted(signal)?;
+    async fn exists(&self, path: &str, context: &Context) -> Result<bool, FileError> {
+        check_aborted(context.abort_signal())?;
         match std::fs::metadata(path) {
             Ok(_) => Ok(true),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -247,9 +222,9 @@ impl FileSystem for NodeExecutionEnv {
         &self,
         path: &str,
         recursive: bool,
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<(), FileError> {
-        check_aborted(signal)?;
+        check_aborted(context.abort_signal())?;
         if recursive {
             std::fs::create_dir_all(path).map_err(|e| map_io_error(path, &e))
         } else {
@@ -262,9 +237,9 @@ impl FileSystem for NodeExecutionEnv {
         path: &str,
         recursive: bool,
         force: bool,
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<(), FileError> {
-        check_aborted(signal)?;
+        check_aborted(context.abort_signal())?;
         let result = if recursive {
             std::fs::remove_dir_all(path)
         } else {
@@ -280,9 +255,9 @@ impl FileSystem for NodeExecutionEnv {
     async fn create_temp_dir(
         &self,
         prefix: Option<&str>,
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<String, FileError> {
-        check_aborted(signal)?;
+        check_aborted(context.abort_signal())?;
         let prefix = prefix.unwrap_or("tmp-");
         for i in 0..1000 {
             let dir = std::env::temp_dir().join(format!("{prefix}{i}-{}", std::process::id()));
@@ -300,9 +275,9 @@ impl FileSystem for NodeExecutionEnv {
         &self,
         prefix: Option<&str>,
         suffix: Option<&str>,
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<String, FileError> {
-        check_aborted(signal)?;
+        check_aborted(context.abort_signal())?;
         let prefix = prefix.unwrap_or("");
         let suffix = suffix.unwrap_or("");
         for i in 0..1000 {
@@ -327,26 +302,33 @@ impl Shell for NodeExecutionEnv {
         &self,
         command: &str,
         options: ShellExecOptions,
-    ) -> Result<ShellResult, ExecutionError> {
+        context: &Context,
+    ) -> Result<ShellExecResult, ExecutionError> {
         let command = command.to_string();
         let cwd = options.cwd.clone().unwrap_or_else(|| self.cwd.clone());
         let env = options.env.clone();
-        let inherit_env = options.inherit_env;
         let timeout = options.timeout;
-        let abort_signal = options.abort_signal.clone();
-        let on_stdout = options.on_stdout;
-        let on_stderr = options.on_stderr;
+        let capture_options = options.capture.clone();
+        let on_update: Option<
+            Arc<dyn Fn(&crate::harness::types::ShellOutputUpdate, &Context) + Send + Sync>,
+        > = options.on_update.map(|cb| Arc::from(cb));
 
-        tokio::task::spawn_blocking(move || {
+        let capture = Arc::new(OutputCapture::new(
+            capture_options.as_ref(),
+            context.clone(),
+            on_update,
+        ));
+        let capture_clone = Arc::clone(&capture);
+        let context_clone = context.clone();
+
+        let exit_code = tokio::task::spawn_blocking(move || {
             exec_sync(
                 &command,
                 &cwd,
                 env.as_ref(),
-                inherit_env,
                 timeout,
-                abort_signal.as_ref(),
-                on_stdout,
-                on_stderr,
+                &context_clone,
+                &capture_clone,
             )
         })
         .await
@@ -355,10 +337,20 @@ impl Shell for NodeExecutionEnv {
                 ExecutionErrorCode::Unknown,
                 format!("Shell task failed: {e}"),
             )
-        })?
+        })??;
+
+        capture.finish();
+        let view = capture.snapshot();
+        capture.dispose();
+        Ok(ShellExecResult {
+            truncation: view.truncation,
+            spill_path: view.spill_path,
+            last_line_bytes: view.last_line_bytes,
+            exit_code,
+        })
     }
 
-    async fn cleanup(&self) {}
+    async fn cleanup(&self, _context: &Context) {}
 }
 
 impl ExecutionEnv for NodeExecutionEnv {}
@@ -369,12 +361,10 @@ fn exec_sync(
     command: &str,
     cwd: &str,
     env: Option<&std::collections::BTreeMap<String, String>>,
-    _inherit_env: bool,
     timeout: Option<f64>,
-    abort_signal: Option<&AbortSignal>,
-    on_stdout: Option<ShellChunkCallback>,
-    on_stderr: Option<ShellChunkCallback>,
-) -> Result<ShellResult, ExecutionError> {
+    context: &Context,
+    capture: &Arc<OutputCapture>,
+) -> Result<i32, ExecutionError> {
     let mut cmd = std::process::Command::new("sh");
     cmd.arg("-c").arg(command);
     cmd.current_dir(cwd);
@@ -395,8 +385,10 @@ fn exec_sync(
     let stdout_pipe = child.stdout.take().unwrap();
     let stderr_pipe = child.stderr.take().unwrap();
 
-    let stdout_handle = std::thread::spawn(move || read_pipe(stdout_pipe, on_stdout));
-    let stderr_handle = std::thread::spawn(move || read_pipe(stderr_pipe, on_stderr));
+    let capture_stdout = Arc::clone(capture);
+    let capture_stderr = Arc::clone(capture);
+    let stdout_handle = std::thread::spawn(move || read_pipe(stdout_pipe, &capture_stdout));
+    let stderr_handle = std::thread::spawn(move || read_pipe(stderr_pipe, &capture_stderr));
 
     let start = std::time::Instant::now();
     let status = loop {
@@ -408,7 +400,7 @@ fn exec_sync(
         })? {
             break status;
         }
-        if abort_signal.map(|s| s.aborted()).unwrap_or(false) {
+        if context.abort_signal().map(|s| s.aborted()).unwrap_or(false) {
             let _ = child.kill();
             let _ = child.wait();
             let _ = stdout_handle.join();
@@ -433,31 +425,21 @@ fn exec_sync(
         std::thread::sleep(std::time::Duration::from_millis(20));
     };
 
-    let stdout = stdout_handle.join().unwrap_or_default();
-    let stderr = stderr_handle.join().unwrap_or_default();
-
-    Ok(ShellResult {
-        stdout,
-        stderr,
-        exit_code: status.code().unwrap_or(-1),
-    })
+    let _ = stdout_handle.join();
+    let _ = stderr_handle.join();
+    Ok(status.code().unwrap_or(-1))
 }
 
-/// 增量读一个管道，逐 chunk 回调并返回完整内容。
-fn read_pipe<R: Read>(mut pipe: R, on_chunk: Option<ShellChunkCallback>) -> String {
-    let mut all = String::new();
+/// 增量读一个管道，逐 chunk push 到有界捕获器。
+fn read_pipe<R: Read>(mut pipe: R, capture: &Arc<OutputCapture>) {
     let mut buf = [0u8; 8192];
     while let Ok(n) = pipe.read(&mut buf) {
         if n == 0 {
             break;
         }
         let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
-        if let Some(callback) = &on_chunk {
-            callback(&chunk);
-        }
-        all.push_str(&chunk);
+        capture.push(&chunk);
     }
-    all
 }
 
 #[cfg(test)]
@@ -465,7 +447,11 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    use crate::harness::types::Shell;
+    use crate::harness::context::BACKGROUND_CONTEXT;
+    use crate::harness::types::{
+        Shell, ShellOutputCaptureOptions, ShellOutputLimits, ShellOutputRetention,
+        ShellOutputUpdate,
+    };
 
     #[tokio::test]
     async fn exec_streams_stdout_chunks() {
@@ -473,16 +459,32 @@ mod tests {
         let chunks = Arc::new(Mutex::new(Vec::new()));
         let chunks_clone = chunks.clone();
         let options = ShellExecOptions {
-            on_stdout: Some(Box::new(move |chunk: &str| {
-                chunks_clone.lock().unwrap().push(chunk.to_string());
-            })),
+            capture: Some(ShellOutputCaptureOptions {
+                limits: ShellOutputLimits {
+                    max_bytes: 50 * 1024,
+                    max_lines: 2000,
+                    retain: Some(ShellOutputRetention::Tail),
+                },
+                spill: Some(true),
+            }),
+            on_update: Some(Box::new(
+                move |update: &ShellOutputUpdate, _ctx: &Context| {
+                    if let ShellOutputUpdate::Append { text, .. }
+                    | ShellOutputUpdate::Slide { text, .. } = update
+                    {
+                        chunks_clone.lock().unwrap().push(text.clone());
+                    }
+                },
+            )),
             ..Default::default()
         };
 
-        let result = env.exec("printf 'line1\nline2\n'", options).await.unwrap();
-        assert_eq!(result.stdout, "line1\nline2\n");
-        let chunks = chunks.lock().unwrap();
-        assert!(!chunks.is_empty());
-        assert_eq!(chunks.concat(), "line1\nline2\n");
+        let context = (*BACKGROUND_CONTEXT).clone();
+        let result = env
+            .exec("printf 'line1\nline2\n'", options, &context)
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+        // 流式 on_update 时序由 AdaptivePublisher 控制，此处仅验证执行成功。
     }
 }

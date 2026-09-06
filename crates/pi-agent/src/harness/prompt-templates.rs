@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use crate::harness::context::Context;
 use crate::harness::types::{ExecutionEnv, PromptTemplate};
 
 /// 对应 `PromptTemplateDiagnosticCode`。
@@ -39,22 +40,23 @@ pub struct PromptTemplateDiagnostic {
 pub async fn load_prompt_templates(
     env: &Arc<dyn ExecutionEnv>,
     paths: &[String],
+    context: &Context,
 ) -> (Vec<PromptTemplate>, Vec<PromptTemplateDiagnostic>) {
     let mut templates = Vec::new();
     let diagnostics = Vec::new();
     for path in paths {
-        let info = match env.file_info(path, None).await {
+        let info = match env.file_info(path, context).await {
             Ok(info) => info,
             Err(_) => continue,
         };
         if info.kind == crate::harness::types::FileKind::Directory {
-            let entries = env.list_dir(&info.path, None).await.unwrap_or_default();
+            let entries = env.list_dir(&info.path, context).await.unwrap_or_default();
             let mut sorted = entries;
             sorted.sort_by(|a, b| a.name.cmp(&b.name));
             for entry in sorted {
                 if entry.kind == crate::harness::types::FileKind::File
                     && entry.name.ends_with(".md")
-                    && let Ok(content) = env.read_text_file(&entry.path, None).await
+                    && let Ok(content) = env.read_text_file(&entry.path, context).await
                     && let Some(template) = parse_template_file(&content, &entry.name)
                 {
                     templates.push(template);
@@ -62,7 +64,7 @@ pub async fn load_prompt_templates(
             }
         } else if info.kind == crate::harness::types::FileKind::File
             && info.name.ends_with(".md")
-            && let Ok(content) = env.read_text_file(&info.path, None).await
+            && let Ok(content) = env.read_text_file(&info.path, context).await
             && let Some(template) = parse_template_file(&content, &info.name)
         {
             templates.push(template);
@@ -77,11 +79,13 @@ pub async fn load_sourced_prompt_templates<T: Clone>(
     env: &Arc<dyn ExecutionEnv>,
     inputs: &[(String, T)],
     map_prompt_template: Option<&(dyn Fn(&PromptTemplate, &T) -> PromptTemplate + Sync)>,
+    context: &Context,
 ) -> (Vec<(PromptTemplate, T)>, Vec<(PromptTemplateDiagnostic, T)>) {
     let mut prompt_templates = Vec::new();
     let mut diagnostics = Vec::new();
     for (path, source) in inputs {
-        let (templates, diags) = load_prompt_templates(env, std::slice::from_ref(path)).await;
+        let (templates, diags) =
+            load_prompt_templates(env, std::slice::from_ref(path), context).await;
         for template in templates {
             let mapped = match map_prompt_template {
                 Some(map) => map(&template, source),

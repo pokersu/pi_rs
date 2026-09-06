@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use pi_ai::{AbortSignal, CacheRetention, Tool, Transport};
+use pi_ai::{CacheRetention, Tool, Transport};
 
 use crate::harness::context::Context;
 use crate::types::AgentToolResult;
@@ -170,89 +170,61 @@ pub struct FileInfo {
 #[async_trait::async_trait]
 pub trait FileSystem: Send + Sync {
     fn cwd(&self) -> &str;
-    async fn absolute_path(
-        &self,
-        path: &str,
-        signal: Option<&AbortSignal>,
-    ) -> Result<String, FileError>;
-    async fn join_path(
-        &self,
-        parts: &[&str],
-        signal: Option<&AbortSignal>,
-    ) -> Result<String, FileError>;
-    async fn read_text_file(
-        &self,
-        path: &str,
-        signal: Option<&AbortSignal>,
-    ) -> Result<String, FileError>;
+    async fn absolute_path(&self, path: &str, context: &Context) -> Result<String, FileError>;
+    async fn join_path(&self, parts: &[&str], context: &Context) -> Result<String, FileError>;
+    async fn read_text_file(&self, path: &str, context: &Context) -> Result<String, FileError>;
     async fn read_text_lines(
         &self,
         path: &str,
         max_lines: Option<usize>,
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<Vec<String>, FileError>;
-    async fn read_binary_file(
-        &self,
-        path: &str,
-        signal: Option<&AbortSignal>,
-    ) -> Result<Vec<u8>, FileError>;
+    async fn read_binary_file(&self, path: &str, context: &Context) -> Result<Vec<u8>, FileError>;
     async fn write_file(
         &self,
         path: &str,
         content: &[u8],
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<(), FileError>;
     async fn append_file(
         &self,
         path: &str,
         content: &[u8],
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<(), FileError>;
     async fn rename_file(
         &self,
         source: &str,
         dest: &str,
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<(), FileError>;
-    async fn file_info(
-        &self,
-        path: &str,
-        signal: Option<&AbortSignal>,
-    ) -> Result<FileInfo, FileError>;
-    async fn list_dir(
-        &self,
-        path: &str,
-        signal: Option<&AbortSignal>,
-    ) -> Result<Vec<FileInfo>, FileError>;
-    async fn canonical_path(
-        &self,
-        path: &str,
-        signal: Option<&AbortSignal>,
-    ) -> Result<String, FileError>;
-    async fn exists(&self, path: &str, signal: Option<&AbortSignal>) -> Result<bool, FileError>;
+    async fn file_info(&self, path: &str, context: &Context) -> Result<FileInfo, FileError>;
+    async fn list_dir(&self, path: &str, context: &Context) -> Result<Vec<FileInfo>, FileError>;
+    async fn canonical_path(&self, path: &str, context: &Context) -> Result<String, FileError>;
+    async fn exists(&self, path: &str, context: &Context) -> Result<bool, FileError>;
     async fn create_dir(
         &self,
         path: &str,
         recursive: bool,
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<(), FileError>;
     async fn remove(
         &self,
         path: &str,
         recursive: bool,
         force: bool,
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<(), FileError>;
     async fn create_temp_dir(
         &self,
         prefix: Option<&str>,
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<String, FileError>;
     async fn create_temp_file(
         &self,
         prefix: Option<&str>,
         suffix: Option<&str>,
-        signal: Option<&AbortSignal>,
+        context: &Context,
     ) -> Result<String, FileError>;
     async fn cleanup(&self);
 }
@@ -349,6 +321,9 @@ pub struct ShellExecResult {
     pub exit_code: i32,
 }
 
+/// 对应 `onUpdate`：有界输出变化回调。
+pub type ShellOutputUpdateCallback = Box<dyn Fn(&ShellOutputUpdate, &Context) + Send + Sync>;
+
 /// 对应 `ShellExecOptions`
 #[derive(Default)]
 pub struct ShellExecOptions {
@@ -356,15 +331,11 @@ pub struct ShellExecOptions {
     pub env: Option<BTreeMap<String, String>>,
     pub inherit_env: bool,
     pub timeout: Option<f64>,
-    pub abort_signal: Option<AbortSignal>,
-    /// stdout 产出时回调（流式进度）。
-    pub on_stdout: Option<ShellChunkCallback>,
-    /// stderr 产出时回调（流式进度）。
-    pub on_stderr: Option<ShellChunkCallback>,
+    /// 源侧有界捕获。当此字段与 `on_update` 均缺省时丢弃输出。
+    pub capture: Option<ShellOutputCaptureOptions>,
+    /// 有界输出变化回调。
+    pub on_update: Option<ShellOutputUpdateCallback>,
 }
-
-/// 对应 `onStdout` / `onStderr`：每次产出 chunk 时同步回调。
-pub type ShellChunkCallback = Box<dyn Fn(&str) + Send + Sync>;
 
 impl Clone for ShellExecOptions {
     fn clone(&self) -> Self {
@@ -373,10 +344,9 @@ impl Clone for ShellExecOptions {
             env: self.env.clone(),
             inherit_env: self.inherit_env,
             timeout: self.timeout,
-            abort_signal: self.abort_signal.clone(),
+            capture: self.capture.clone(),
             // 回调是一次性消费，clone 时不可复制。
-            on_stdout: None,
-            on_stderr: None,
+            on_update: None,
         }
     }
 }
@@ -388,19 +358,10 @@ impl std::fmt::Debug for ShellExecOptions {
             .field("env", &self.env)
             .field("inherit_env", &self.inherit_env)
             .field("timeout", &self.timeout)
-            .field("abort_signal", &self.abort_signal)
-            .field("on_stdout", &self.on_stdout.is_some())
-            .field("on_stderr", &self.on_stderr.is_some())
+            .field("capture", &self.capture)
+            .field("on_update", &self.on_update.is_some())
             .finish()
     }
-}
-
-/// 对应 `Shell.exec` 的返回值
-#[derive(Debug, Clone)]
-pub struct ShellResult {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: i32,
 }
 
 /// 对应 `Shell`
@@ -410,8 +371,9 @@ pub trait Shell: Send + Sync {
         &self,
         command: &str,
         options: ShellExecOptions,
-    ) -> Result<ShellResult, ExecutionError>;
-    async fn cleanup(&self);
+        context: &Context,
+    ) -> Result<ShellExecResult, ExecutionError>;
+    async fn cleanup(&self, context: &Context);
 }
 
 /// 对应 `ExecutionEnv = FileSystem & Shell`

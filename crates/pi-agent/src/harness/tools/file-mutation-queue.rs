@@ -8,6 +8,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use crate::harness::context::Context;
 use crate::harness::result::get_or_throw;
 use crate::harness::types::ExecutionEnv;
 
@@ -20,13 +21,18 @@ fn queues() -> &'static Mutex<HashMap<String, Queue>> {
 }
 
 /// 对应 `withFileMutationQueue`
-pub async fn with_file_mutation_queue<T, F>(env: &Arc<dyn ExecutionEnv>, path: &str, f: F) -> T
+pub async fn with_file_mutation_queue<T, F>(
+    env: &Arc<dyn ExecutionEnv>,
+    path: &str,
+    context: &Context,
+    f: F,
+) -> T
 where
     F: FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send,
     T: Send,
 {
-    let absolute = get_or_throw(env.absolute_path(path, None).await);
-    let key = match env.canonical_path(&absolute, None).await {
+    let absolute = get_or_throw(env.absolute_path(path, context).await);
+    let key = match env.canonical_path(&absolute, context).await {
         Ok(p) => p,
         Err(_) => absolute,
     };

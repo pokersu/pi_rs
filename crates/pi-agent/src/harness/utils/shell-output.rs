@@ -1,12 +1,15 @@
-//! Rust 翻译自 packages/agent/src/harness/utils/shell-output.ts（简化：无流式 onChunk）
+//! Rust 翻译自 packages/agent/src/harness/utils/shell-output.ts（兼容收集层）
 //!
-//! 注：TS 通过 `Shell.exec` 的 `onStdout`/`onStderr` 回调流式捕获；Rust 的
-//! `std::process::Command::output` 为一次性返回，故省略流式进度，保留截断与
-//! 临时文件保存完整输出的核心逻辑。
+//! 基于新的 `Shell.exec` capture/onUpdate 的有界输出收集兼容层。
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use crate::harness::types::{ExecutionEnv, ExecutionError, ShellExecOptions};
+use crate::harness::context::Context;
+use crate::harness::types::{
+    ExecutionEnv, ExecutionError, ExecutionErrorCode, ShellExecOptions, ShellOutputCaptureOptions,
+    ShellOutputLimits, ShellOutputRetention, ShellOutputView,
+};
+use crate::harness::utils::output_capture::{apply_shell_output_update, sanitize_shell_output};
 use crate::harness::utils::truncate::{
     DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncationResult, truncate_tail,
 };
@@ -32,52 +35,42 @@ pub struct ShellCaptureResult {
 
 /// 对应 `sanitizeBinaryOutput`
 pub fn sanitize_binary_output(str: &str) -> String {
-    str.chars()
-        .filter(|c| {
-            let code = *c as u32;
-            if code == 0x09 || code == 0x0a || code == 0x0d {
-                return true;
-            }
-            if code <= 0x1f {
-                return false;
-            }
-            if (0xfff9..=0xfffb).contains(&code) {
-                return false;
-            }
-            true
-        })
-        .collect()
+    sanitize_shell_output(str).replace('\r', "")
 }
 
-/// 对应 `executeShellWithCapture`（简化）。
+/// 对应 `executeShellWithCapture`。
 pub async fn execute_shell_with_capture(
     env: &Arc<dyn ExecutionEnv>,
     command: &str,
     options: ShellExecOptions,
+    context: &Context,
 ) -> Result<ShellCaptureResult, ExecutionError> {
-    let exec_result = env.exec(command, options.clone()).await;
-    let cancelled = options
-        .abort_signal
-        .as_ref()
-        .map(|s| s.aborted())
-        .unwrap_or(false);
+    let view_ref = Arc::new(Mutex::new(None::<ShellOutputView>));
+    let view_for_cb = Arc::clone(&view_ref);
 
-    let stdout = match &exec_result {
-        Ok(r) => &r.stdout,
-        Err(_) => "",
-    };
-    let stderr = match &exec_result {
-        Ok(r) => &r.stderr,
-        Err(_) => "",
-    };
-    let combined = if stdout.is_empty() {
-        stderr.to_string()
-    } else if stderr.is_empty() {
-        stdout.to_string()
-    } else {
-        format!("{stdout}\n{stderr}")
-    };
-    let combined = sanitize_binary_output(&combined).replace('\r', "");
+    let mut exec_options = options;
+    exec_options.capture = Some(ShellOutputCaptureOptions {
+        limits: ShellOutputLimits {
+            max_bytes: DEFAULT_MAX_BYTES,
+            max_lines: DEFAULT_MAX_LINES,
+            retain: Some(ShellOutputRetention::Tail),
+        },
+        spill: Some(true),
+    });
+    exec_options.on_update = Some(Box::new(
+        move |update: &crate::harness::types::ShellOutputUpdate, _ctx: &Context| {
+            let mut view = view_for_cb.lock().unwrap();
+            let next = apply_shell_output_update(view.as_ref(), update);
+            *view = Some(next);
+        },
+    ));
+
+    let exec_result = env.exec(command, exec_options, context).await;
+    let cancelled = context.abort_signal().map(|s| s.aborted()).unwrap_or(false);
+
+    let view = view_ref.lock().unwrap().clone();
+    let combined = view.as_ref().map(|v| v.text.clone()).unwrap_or_default();
+    let combined = sanitize_binary_output(&combined);
 
     let total_bytes = combined.len();
     let total_lines = if combined.is_empty() {
@@ -88,16 +81,11 @@ pub async fn execute_shell_with_capture(
     let truncation = truncate_tail(&combined, Default::default());
     let truncated = total_lines > DEFAULT_MAX_LINES || total_bytes > DEFAULT_MAX_BYTES;
 
-    // 超限时保存完整输出到临时文件。
-    let mut full_output_path = None;
-    if truncated
-        && let Ok(temp_file) = env
-            .create_temp_file(Some("bash-"), Some(".log"), None)
-            .await
-    {
-        let _ = env.write_file(&temp_file, combined.as_bytes(), None).await;
-        full_output_path = Some(temp_file);
-    }
+    let full_output_path = view.as_ref().and_then(|v| v.spill_path.clone());
+    let last_line_bytes = view
+        .as_ref()
+        .and_then(|v| v.last_line_bytes)
+        .unwrap_or_else(|| combined.rsplit('\n').next().map(|l| l.len()).unwrap_or(0));
 
     let progress = ShellCaptureProgress {
         output: if truncated {
@@ -112,7 +100,7 @@ pub async fn execute_shell_with_capture(
             ..truncation
         },
         full_output_path,
-        last_line_bytes: combined.rsplit('\n').next().map(|l| l.len()).unwrap_or(0),
+        last_line_bytes,
     };
 
     match exec_result {
@@ -128,7 +116,7 @@ pub async fn execute_shell_with_capture(
             execution_error: None,
         }),
         Err(error) => {
-            if error.code == crate::harness::types::ExecutionErrorCode::Aborted || cancelled {
+            if error.code == ExecutionErrorCode::Aborted || cancelled {
                 Ok(ShellCaptureResult {
                     exit_code: None,
                     cancelled: true,
@@ -137,7 +125,6 @@ pub async fn execute_shell_with_capture(
                     execution_error: None,
                 })
             } else {
-                // returnExecutionErrors 语义：返回带捕获输出的结果。
                 Ok(ShellCaptureResult {
                     exit_code: None,
                     cancelled: false,

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use pi_ai::AbortSignal;
+use crate::harness::context::Context;
 
 use crate::harness::result::get_or_throw;
 use crate::harness::types::ExecutionEnv;
@@ -26,18 +26,18 @@ fn normalize_tool_path(path: &str) -> String {
 pub async fn resolve_tool_path(
     env: &Arc<dyn ExecutionEnv>,
     path: &str,
-    signal: Option<&AbortSignal>,
+    context: &Context,
 ) -> String {
-    get_or_throw(env.absolute_path(&normalize_tool_path(path), signal).await)
+    get_or_throw(env.absolute_path(&normalize_tool_path(path), context).await)
 }
 
 /// 对应 `resolveReadToolPath`
 pub async fn resolve_read_tool_path(
     env: &Arc<dyn ExecutionEnv>,
     path: &str,
-    signal: Option<&AbortSignal>,
+    context: &Context,
 ) -> String {
-    let resolved = resolve_tool_path(env, path, signal).await;
+    let resolved = resolve_tool_path(env, path, context).await;
     let variants = vec![
         resolved.clone(),
         resolved
@@ -46,7 +46,7 @@ pub async fn resolve_read_tool_path(
         resolved.replace('\'', "\u{2019}"),
     ];
     for variant in variants {
-        if get_or_throw(env.exists(&variant, signal).await) {
+        if get_or_throw(env.exists(&variant, context).await) {
             return variant;
         }
     }

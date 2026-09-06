@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
-use pi_ai::{AbortSignal, TextContent, TextKind, TextOrImageContent};
+use pi_ai::{TextContent, TextKind, TextOrImageContent};
 
+use crate::harness::context::{BACKGROUND_CONTEXT, Context, with_abort_signal};
 use crate::harness::types::ExecutionEnv;
 use crate::types::{AgentTool, AgentToolResult};
 
@@ -41,7 +42,11 @@ pub fn create_read_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
                     .to_string();
                 let offset = params.get("offset").and_then(|v| v.as_u64());
                 let limit = params.get("limit").and_then(|v| v.as_u64());
-                read_file(&env, &path, offset, limit, signal).await
+                let context = match signal {
+                    Some(s) => with_abort_signal(&s, &BACKGROUND_CONTEXT),
+                    None => (*BACKGROUND_CONTEXT).clone(),
+                };
+                read_file(&env, &path, offset, limit, &context).await
             })
         }),
         execution_mode: None,
@@ -62,10 +67,9 @@ async fn read_file(
     path: &str,
     offset: Option<u64>,
     limit: Option<u64>,
-    signal: Option<AbortSignal>,
+    context: &Context,
 ) -> AgentToolResult {
-    let absolute =
-        crate::harness::result::get_or_throw(env.absolute_path(path, signal.as_ref()).await);
+    let absolute = crate::harness::result::get_or_throw(env.absolute_path(path, context).await);
 
     // 按扩展名检测图片，简化处理：返回提示。
     let lower = path.to_lowercase();
@@ -87,9 +91,8 @@ async fn read_file(
         };
     }
 
-    let bytes = crate::harness::result::get_or_throw(
-        env.read_binary_file(&absolute, signal.as_ref()).await,
-    );
+    let bytes =
+        crate::harness::result::get_or_throw(env.read_binary_file(&absolute, context).await);
     let text = String::from_utf8_lossy(&bytes).to_string();
     let all_lines: Vec<&str> = text.split('\n').collect();
     let total_lines = all_lines.len();
