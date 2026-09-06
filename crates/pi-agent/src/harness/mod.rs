@@ -12,6 +12,7 @@ pub mod messages;
 #[path = "prompt-templates.rs"]
 pub mod prompt_templates;
 pub mod result;
+pub mod runtime;
 pub mod session;
 pub mod skills;
 #[path = "system-prompt.rs"]
