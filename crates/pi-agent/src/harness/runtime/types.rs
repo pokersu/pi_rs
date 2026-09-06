@@ -72,6 +72,7 @@ pub struct CommitDecision {
 }
 
 /// 对应 `LaneCommand`（序列化 mutation 线上的 effect-free decision）。
+#[allow(clippy::large_enum_variant)]
 pub enum LaneCommand<T> {
     Commit {
         decision: CommitDecision,
@@ -88,6 +89,7 @@ pub enum LaneCommand<T> {
 }
 
 /// 对应 `OperationCommand`。
+#[allow(clippy::large_enum_variant)]
 pub enum OperationCommand<T> {
     Commit {
         decision: CommitDecision,
