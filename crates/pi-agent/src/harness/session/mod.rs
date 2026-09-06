@@ -8,6 +8,7 @@ pub mod session;
 pub mod state;
 pub mod testing;
 pub mod types;
+pub mod values;
 
 pub use memory::{InMemorySessionRepo, InMemorySessionStorage};
 pub use session::Session;
