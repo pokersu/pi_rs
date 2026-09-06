@@ -79,10 +79,54 @@ pub fn faux_assistant_message(
     }
 }
 
-/// 对应 `FauxProviderState`（简化）。
+/// 对应 `FauxProviderState`。
 #[derive(Debug, Default)]
 pub struct FauxProviderState {
     pub call_count: u64,
+    pub deferred_fetch_count: u64,
+    pub cancelled_deferred: Vec<crate::types::DeferredHandle>,
+}
+
+/// 对应 `FauxContentBlock = TextContent | ThinkingContent | ToolCall`。
+pub type FauxContentBlock = ContentBlock;
+
+/// 对应 `FauxModelDefinition`。
+#[derive(Debug, Clone)]
+pub struct FauxModelDefinition {
+    pub id: String,
+    pub name: Option<String>,
+    pub reasoning: Option<bool>,
+    pub input: Option<Vec<crate::types::InputModality>>,
+    pub cost: Option<crate::types::ModelCost>,
+    pub context_window: Option<u64>,
+    pub max_tokens: Option<u64>,
+}
+
+/// 对应 `FauxResponseFactory`。
+pub type FauxResponseFactory = Box<
+    dyn Fn(
+            &crate::types::Context,
+            Option<&crate::types::SimpleStreamOptions>,
+            &FauxProviderState,
+            &Model,
+        ) -> AssistantMessage
+        + Send
+        + Sync,
+>;
+
+/// 对应 `FauxResponseStep = AssistantMessage | FauxResponseFactory`。
+#[allow(clippy::large_enum_variant)]
+pub enum FauxResponseStep {
+    Message(AssistantMessage),
+    Factory(FauxResponseFactory),
+}
+
+/// 对应 `RegisterFauxProviderOptions`（deferred 与 token 速率控制省略）。
+#[derive(Debug, Clone, Default)]
+pub struct RegisterFauxProviderOptions {
+    pub api: Option<String>,
+    pub provider: Option<String>,
+    pub models: Option<Vec<FauxModelDefinition>>,
 }
 
 /// 对应 `streamWithDeltas` 的简化版：按块一次性回放事件序列。

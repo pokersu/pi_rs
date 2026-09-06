@@ -18,6 +18,8 @@ pub mod hash;
 pub mod headers;
 #[path = "json-parse.rs"]
 pub mod json_parse;
+#[path = "node-http-proxy.rs"]
+pub mod node_http_proxy;
 #[path = "overflow.rs"]
 pub mod overflow;
 #[path = "pi-user-agent.rs"]

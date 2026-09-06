@@ -7,10 +7,30 @@ use std::sync::Arc;
 
 use crate::harness::types::{ExecutionEnv, PromptTemplate};
 
+/// 对应 `PromptTemplateDiagnosticCode`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptTemplateDiagnosticCode {
+    FileInfoFailed,
+    ListFailed,
+    ReadFailed,
+    ParseFailed,
+}
+
+impl PromptTemplateDiagnosticCode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::FileInfoFailed => "file_info_failed",
+            Self::ListFailed => "list_failed",
+            Self::ReadFailed => "read_failed",
+            Self::ParseFailed => "parse_failed",
+        }
+    }
+}
+
 /// 对应 `PromptTemplateDiagnostic`
 #[derive(Debug, Clone)]
 pub struct PromptTemplateDiagnostic {
-    pub code: String,
+    pub code: PromptTemplateDiagnosticCode,
     pub message: String,
     pub path: String,
 }
@@ -49,6 +69,31 @@ pub async fn load_prompt_templates(
         }
     }
     (templates, diagnostics)
+}
+
+/// 对应 `loadSourcedPromptTemplates`：从带 source 的路径加载，source 附加到每个结果。
+#[allow(clippy::type_complexity)]
+pub async fn load_sourced_prompt_templates<T: Clone>(
+    env: &Arc<dyn ExecutionEnv>,
+    inputs: &[(String, T)],
+    map_prompt_template: Option<&(dyn Fn(&PromptTemplate, &T) -> PromptTemplate + Sync)>,
+) -> (Vec<(PromptTemplate, T)>, Vec<(PromptTemplateDiagnostic, T)>) {
+    let mut prompt_templates = Vec::new();
+    let mut diagnostics = Vec::new();
+    for (path, source) in inputs {
+        let (templates, diags) = load_prompt_templates(env, std::slice::from_ref(path)).await;
+        for template in templates {
+            let mapped = match map_prompt_template {
+                Some(map) => map(&template, source),
+                None => template,
+            };
+            prompt_templates.push((mapped, source.clone()));
+        }
+        for diagnostic in diags {
+            diagnostics.push((diagnostic, source.clone()));
+        }
+    }
+    (prompt_templates, diagnostics)
 }
 
 fn parse_template_file(content: &str, file_name: &str) -> Option<PromptTemplate> {

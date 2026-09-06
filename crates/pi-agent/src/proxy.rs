@@ -4,9 +4,10 @@
 
 use futures::StreamExt;
 use pi_ai::{
-    AbortSignal, AssistantMessage, AssistantMessageEvent, ContentBlock, Context, ErrorStopReason,
-    Model, SimpleStreamOptions, StopReason, TerminalStopReason, TextContent, TextKind,
-    ThinkingContent, ThinkingKind, ToolCall, Usage,
+    AbortSignal, AssistantMessage, AssistantMessageEvent, CacheRetention, ContentBlock, Context,
+    ErrorStopReason, Model, SimpleStreamOptions, StopReason, TerminalStopReason, TextContent,
+    TextKind, ThinkingBudgets, ThinkingContent, ThinkingKind, ThinkingLevel, ToolCall, Transport,
+    Usage,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -278,17 +279,35 @@ fn set_content(partial: &mut AssistantMessage, index: usize, content: ContentBlo
     partial.content[index] = content;
 }
 
+/// 对应 `ProxyStreamOptions`：含可序列化流式选项 + 代理地址/令牌。
+#[derive(Debug, Clone, Default)]
+pub struct ProxyStreamOptions {
+    pub signal: Option<AbortSignal>,
+    pub auth_token: String,
+    pub proxy_url: String,
+    pub temperature: Option<f64>,
+    pub sampling_params: Option<serde_json::Value>,
+    pub max_tokens: Option<u64>,
+    pub reasoning: Option<ThinkingLevel>,
+    pub cache_retention: Option<CacheRetention>,
+    pub session_id: Option<String>,
+    pub headers: Option<std::collections::BTreeMap<String, Option<String>>>,
+    pub metadata: Option<serde_json::Value>,
+    pub transport: Option<Transport>,
+    pub thinking_budgets: Option<ThinkingBudgets>,
+    pub max_retry_delay_ms: Option<u64>,
+}
+
 /// 对应 `streamProxy`：把请求转发给代理服务器并重建事件流。
 pub fn stream_proxy(
     model: Model,
     context: Context,
-    proxy_url: String,
-    auth_token: String,
+    options: ProxyStreamOptions,
 ) -> AssistantMessageEventStream {
     let stream = create_assistant_message_event_stream();
     let producer = stream.clone();
     tokio::spawn(async move {
-        let result = proxy_request(&model, &context, &proxy_url, &auth_token, &producer).await;
+        let result = proxy_request(&model, &context, &options, &producer).await;
         if let Err(message) = result {
             let mut partial = partial_message(&model);
             partial.stop_reason = StopReason::Error;
@@ -324,15 +343,31 @@ fn partial_message(model: &Model) -> AssistantMessage {
 async fn proxy_request(
     model: &Model,
     context: &Context,
-    proxy_url: &str,
-    auth_token: &str,
+    options: &ProxyStreamOptions,
     stream: &AssistantMessageEventStream,
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
-    let body = serde_json::json!({ "model": model, "context": context });
+    // 对应 `buildProxyRequestOptions`：提取可序列化选项。
+    let options_body = serde_json::json!({
+        "temperature": options.temperature,
+        "samplingParams": options.sampling_params,
+        "maxTokens": options.max_tokens,
+        "reasoning": options.reasoning,
+        "cacheRetention": options.cache_retention,
+        "sessionId": options.session_id,
+        "headers": options.headers,
+        "metadata": options.metadata,
+        "transport": options.transport,
+        "thinkingBudgets": options.thinking_budgets,
+        "maxRetryDelayMs": options.max_retry_delay_ms,
+    });
+    let body = serde_json::json!({ "model": model, "context": context, "options": options_body });
     let response = client
-        .post(format!("{}/api/stream", proxy_url.trim_end_matches('/')))
-        .header("Authorization", format!("Bearer {auth_token}"))
+        .post(format!(
+            "{}/api/stream",
+            options.proxy_url.trim_end_matches('/')
+        ))
+        .header("Authorization", format!("Bearer {}", options.auth_token))
         .header("Content-Type", "application/json")
         .json(&body)
         .send()
@@ -377,8 +412,11 @@ pub fn proxy_stream_fn(proxy_url: String, auth_token: String) -> StreamFn {
         stream_proxy(
             model.clone(),
             context.clone(),
-            proxy_url.clone(),
-            auth_token.clone(),
+            ProxyStreamOptions {
+                proxy_url: proxy_url.clone(),
+                auth_token: auth_token.clone(),
+                ..Default::default()
+            },
         )
     })
 }

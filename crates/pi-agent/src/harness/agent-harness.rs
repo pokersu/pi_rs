@@ -44,100 +44,92 @@ impl std::fmt::Display for HarnessNotImplemented {
 }
 impl std::error::Error for HarnessNotImplemented {}
 
-/// 对应各 TaggedError（LaneBusy/MissingIdentities/... 等），简化为带标签的错误。
+// 对应各 `TaggedError` 派生错误类（LaneBusy/MissingIdentities/... 等）。
+crate::tagged_error!(LaneBusy, "LaneBusy", {
+    lane: String,
+    operation_id: String,
+    operation_kind: String,
+    message: String,
+});
+crate::tagged_error!(MissingIdentities, "MissingIdentities", {
+    lane: String,
+    tools: Vec<String>,
+    models: Vec<String>,
+    message: String,
+});
+crate::tagged_error!(NoActiveRun, "NoActiveRun", { lane: String, message: String });
+crate::tagged_error!(NoActiveOperation, "NoActiveOperation", { lane: String, message: String });
+crate::tagged_error!(NothingToResume, "NothingToResume", { lane: String, message: String });
+crate::tagged_error!(InvalidMessage, "InvalidMessage", { lane: String, reason: String, message: String });
+crate::tagged_error!(UnknownSkill, "UnknownSkill", { name: String, message: String });
+crate::tagged_error!(UnknownTemplate, "UnknownTemplate", { name: String, message: String });
+crate::tagged_error!(UnknownTarget, "UnknownTarget", { target_id: String, message: String });
+crate::tagged_error!(UnknownQueueItem, "UnknownQueueItem", { lane: String, entry_id: String, message: String });
+crate::tagged_error!(LaneExists, "LaneExists", { lane: String, message: String });
+crate::tagged_error!(InvalidLane, "InvalidLane", { lane: String, reason: String, message: String });
+crate::tagged_error!(NothingToCompact, "NothingToCompact", { lane: String, message: String });
+crate::tagged_error!(Closed, "Closed", { message: String });
+
+/// 对应各错误联合类型（`RunRejected`/`CompactionRejected`/... 等）。
 #[derive(Debug, Clone)]
-pub struct HarnessError {
-    pub tag: &'static str,
-    pub message: String,
+pub enum HarnessError {
+    LaneBusy(LaneBusy),
+    MissingIdentities(MissingIdentities),
+    NoActiveRun(NoActiveRun),
+    NoActiveOperation(NoActiveOperation),
+    NothingToResume(NothingToResume),
+    InvalidMessage(InvalidMessage),
+    UnknownSkill(UnknownSkill),
+    UnknownTemplate(UnknownTemplate),
+    UnknownTarget(UnknownTarget),
+    UnknownQueueItem(UnknownQueueItem),
+    LaneExists(LaneExists),
+    InvalidLane(InvalidLane),
+    NothingToCompact(NothingToCompact),
+    Closed(Closed),
 }
 
-impl HarnessError {
-    pub fn lane_busy(message: impl Into<String>) -> Self {
-        Self {
-            tag: "LaneBusy",
-            message: message.into(),
+macro_rules! harness_error_delegate {
+    ($($variant:ident),* $(,)?) => {
+        impl std::fmt::Display for HarnessError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    $(HarnessError::$variant(e) => std::fmt::Display::fmt(e, f),)*
+                }
+            }
         }
-    }
-    pub fn invalid_message(message: impl Into<String>) -> Self {
-        Self {
-            tag: "InvalidMessage",
-            message: message.into(),
+        impl std::error::Error for HarnessError {}
+        impl crate::harness::result::TaggedError for HarnessError {
+            fn tag(&self) -> &'static str {
+                match self {
+                    $(HarnessError::$variant(e) => crate::harness::result::TaggedError::tag(e),)*
+                }
+            }
+            fn to_json(&self) -> serde_json::Value {
+                match self {
+                    $(HarnessError::$variant(e) => crate::harness::result::TaggedError::to_json(e),)*
+                }
+            }
         }
-    }
-    pub fn unknown_skill(message: impl Into<String>) -> Self {
-        Self {
-            tag: "UnknownSkill",
-            message: message.into(),
-        }
-    }
-    pub fn unknown_template(message: impl Into<String>) -> Self {
-        Self {
-            tag: "UnknownTemplate",
-            message: message.into(),
-        }
-    }
-    pub fn nothing_to_compact(message: impl Into<String>) -> Self {
-        Self {
-            tag: "NothingToCompact",
-            message: message.into(),
-        }
-    }
-    pub fn nothing_to_resume(message: impl Into<String>) -> Self {
-        Self {
-            tag: "NothingToResume",
-            message: message.into(),
-        }
-    }
-    pub fn missing_identities(message: impl Into<String>) -> Self {
-        Self {
-            tag: "MissingIdentities",
-            message: message.into(),
-        }
-    }
-    pub fn unknown_target(message: impl Into<String>) -> Self {
-        Self {
-            tag: "UnknownTarget",
-            message: message.into(),
-        }
-    }
-    pub fn no_active_run(message: impl Into<String>) -> Self {
-        Self {
-            tag: "NoActiveRun",
-            message: message.into(),
-        }
-    }
-    pub fn no_active_operation(message: impl Into<String>) -> Self {
-        Self {
-            tag: "NoActiveOperation",
-            message: message.into(),
-        }
-    }
-    pub fn unknown_queue_item(message: impl Into<String>) -> Self {
-        Self {
-            tag: "UnknownQueueItem",
-            message: message.into(),
-        }
-    }
-    pub fn lane_exists(message: impl Into<String>) -> Self {
-        Self {
-            tag: "LaneExists",
-            message: message.into(),
-        }
-    }
-    pub fn invalid_lane(message: impl Into<String>) -> Self {
-        Self {
-            tag: "InvalidLane",
-            message: message.into(),
-        }
-    }
+    };
 }
 
-impl std::fmt::Display for HarnessError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.tag, self.message)
-    }
-}
-impl std::error::Error for HarnessError {}
+harness_error_delegate!(
+    LaneBusy,
+    MissingIdentities,
+    NoActiveRun,
+    NoActiveOperation,
+    NothingToResume,
+    InvalidMessage,
+    UnknownSkill,
+    UnknownTemplate,
+    UnknownTarget,
+    UnknownQueueItem,
+    LaneExists,
+    InvalidLane,
+    NothingToCompact,
+    Closed,
+);
 
 /// 对应 `OperationError`
 #[derive(Debug, Clone)]

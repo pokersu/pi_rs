@@ -12,10 +12,32 @@ use crate::harness::types::{ExecutionEnv, Skill};
 const MAX_NAME_LENGTH: usize = 64;
 const MAX_DESCRIPTION_LENGTH: usize = 1024;
 
+/// 对应 `SkillDiagnosticCode`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillDiagnosticCode {
+    FileInfoFailed,
+    ListFailed,
+    ReadFailed,
+    ParseFailed,
+    InvalidMetadata,
+}
+
+impl SkillDiagnosticCode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::FileInfoFailed => "file_info_failed",
+            Self::ListFailed => "list_failed",
+            Self::ReadFailed => "read_failed",
+            Self::ParseFailed => "parse_failed",
+            Self::InvalidMetadata => "invalid_metadata",
+        }
+    }
+}
+
 /// 对应 `SkillDiagnostic`
 #[derive(Debug, Clone)]
 pub struct SkillDiagnostic {
-    pub code: String,
+    pub code: SkillDiagnosticCode,
     pub message: String,
     pub path: String,
 }
@@ -55,6 +77,31 @@ pub async fn load_skills(
                 &mut diagnostics,
             )
             .await;
+        }
+    }
+    (skills, diagnostics)
+}
+
+/// 对应 `loadSourcedSkills`：从带 source 的路径加载，source 附加到每个结果。
+#[allow(clippy::type_complexity)]
+pub async fn load_sourced_skills<T: Clone>(
+    env: &Arc<dyn ExecutionEnv>,
+    inputs: &[(String, T)],
+    map_skill: Option<&(dyn Fn(&Skill, &T) -> Skill + Sync)>,
+) -> (Vec<(Skill, T)>, Vec<(SkillDiagnostic, T)>) {
+    let mut skills = Vec::new();
+    let mut diagnostics = Vec::new();
+    for (path, source) in inputs {
+        let (loaded, diags) = load_skills(env, std::slice::from_ref(path)).await;
+        for skill in loaded {
+            let mapped = match map_skill {
+                Some(map) => map(&skill, source),
+                None => skill,
+            };
+            skills.push((mapped, source.clone()));
+        }
+        for diagnostic in diags {
+            diagnostics.push((diagnostic, source.clone()));
         }
     }
     (skills, diagnostics)
@@ -151,7 +198,7 @@ async fn load_skill_from_file(
         Ok(content) => content,
         Err(e) => {
             diagnostics.push(SkillDiagnostic {
-                code: "read_failed".into(),
+                code: SkillDiagnosticCode::ReadFailed,
                 message: e.message,
                 path: file_path.into(),
             });
@@ -169,14 +216,14 @@ async fn load_skill_from_file(
     let name = frontmatter_name.unwrap_or_else(|| parent_dir_name.to_string());
     for error in validate_name(&name, parent_dir_name) {
         diagnostics.push(SkillDiagnostic {
-            code: "invalid_metadata".into(),
+            code: SkillDiagnosticCode::InvalidMetadata,
             message: error,
             path: file_path.into(),
         });
     }
     for error in validate_description(Some(&description)) {
         diagnostics.push(SkillDiagnostic {
-            code: "invalid_metadata".into(),
+            code: SkillDiagnosticCode::InvalidMetadata,
             message: error,
             path: file_path.into(),
         });

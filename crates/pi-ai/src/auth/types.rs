@@ -77,6 +77,10 @@ impl OAuthCredential {
     }
 }
 
+/// 对应 `OAuthCredentials`（不含 `type` 判别字段的 OAuth 凭据，供 refresh 等流程使用）。
+/// Rust 中 `OAuthCredential` 本身不含 `type` 字段，故直接别名。
+pub type OAuthCredentials = OAuthCredential;
+
 /// 对应 `Credential = ApiKeyCredential | OAuthCredential`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
