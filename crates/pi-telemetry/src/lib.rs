@@ -79,6 +79,28 @@ pub trait TelemetryContext: Send + Sync {
         T: Send + 'a;
 }
 
+/// dyn 兼容的 `TelemetryContext` 类型擦除包装（用于 `Context` 等需要 trait object 的场景）。
+///
+/// 因 `TelemetryContext::start_span` 含泛型方法而不 dyn 兼容，此处将其擦除为
+/// `Box<dyn Any + Send>` 返回值，等价于 TS 中的 `Promise<unknown>`。
+pub trait ErasedTelemetryContext: Send + Sync {
+    fn start_span_erased<'a>(
+        &'a self,
+        options: SpanOptions,
+        callback: ErasedSpanCallback<'a>,
+    ) -> ErasedSpanFuture<'a>;
+}
+
+impl<C: TelemetryContext> ErasedTelemetryContext for C {
+    fn start_span_erased<'a>(
+        &'a self,
+        options: SpanOptions,
+        callback: ErasedSpanCallback<'a>,
+    ) -> ErasedSpanFuture<'a> {
+        self.start_span(options, callback)
+    }
+}
+
 /// 对应 `TelemetrySpan`。
 ///
 /// TS 原版 `TelemetrySpan extends TelemetryContext`（span 亦含泛型 `startSpan`）。

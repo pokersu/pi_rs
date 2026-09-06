@@ -10,7 +10,7 @@ use crate::{
 };
 
 /// 对应 TS 的 `noopTelemetrySpan`：实现 `TelemetrySpan` 的空操作单例。
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct NoopTelemetrySpan;
 
 impl TelemetryContext for NoopTelemetrySpan {

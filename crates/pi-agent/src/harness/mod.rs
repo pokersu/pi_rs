@@ -3,6 +3,7 @@
 #[path = "agent-harness.rs"]
 pub mod agent_harness;
 pub mod compaction;
+pub mod context;
 pub mod env;
 pub mod events;
 pub mod messages;
