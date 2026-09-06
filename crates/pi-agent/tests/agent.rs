@@ -141,6 +141,7 @@ async fn agent_loop_executes_tool_call() {
             })
         }),
         execution_mode: None,
+        replay: None,
     };
 
     let context = AgentContext {
@@ -334,6 +335,7 @@ async fn stream_without_start_event_keeps_context_intact() {
             })
         }),
         execution_mode: None,
+        replay: None,
     };
 
     // 捕获每轮 LLM 调用时的 context 消息。

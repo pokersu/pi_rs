@@ -49,6 +49,7 @@ pub fn create_write_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
 			})
 		}),
 		execution_mode: None,
+		replay: None,
 	}
 }
 

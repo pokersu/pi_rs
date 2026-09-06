@@ -22,6 +22,13 @@ pub enum ToolExecutionMode {
     Parallel,
 }
 
+/// 对应 `replay: "never" | "safe"`：effect 的恢复策略（durable intent 存在但结果未知时）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplayPolicy {
+    Never,
+    Safe,
+}
+
 /// 对应 `QueueMode = "all" | "one-at-a-time"`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueueMode {
@@ -73,7 +80,7 @@ pub struct CustomMessage {
 #[serde(rename_all = "camelCase")]
 pub struct BranchSummaryMessage {
     pub summary: String,
-    pub from_id: String,
+    pub from_id: Option<String>,
     pub timestamp: u64,
 }
 
@@ -182,6 +189,8 @@ pub struct AgentTool {
     pub execute: AgentToolExecuteFn,
     /// 对应 `executionMode`
     pub execution_mode: Option<ToolExecutionMode>,
+    /// 对应 `replay`：effect 的恢复策略。
+    pub replay: Option<ReplayPolicy>,
 }
 
 impl AgentTool {

@@ -149,6 +149,7 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
             })
         }),
         execution_mode: None,
+        replay: None,
     }
 }
 

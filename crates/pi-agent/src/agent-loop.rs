@@ -683,6 +683,15 @@ async fn execute_tool_calls_parallel(
                 let signal = signal.cloned();
                 let emit = emit.clone();
                 Box::pin(async move {
+                    if signal.as_ref().map(|s| s.aborted()).unwrap_or(false) {
+                        let finalized = FinalizedToolCallOutcome {
+                            tool_call: tool_call.clone(),
+                            result: create_error_tool_result("Operation aborted"),
+                            is_error: true,
+                        };
+                        emit_tool_execution_end(&finalized, &emit).await;
+                        return finalized;
+                    }
                     let executed = execute_prepared_tool_call(
                         &tool_call,
                         &tool,

@@ -33,6 +33,7 @@ pub fn config_to_tool(config: HttpToolConfig) -> AgentTool {
             Box::pin(async move { execute_http(&config, &params).await })
         }),
         execution_mode: None,
+        replay: None,
     }
 }
 

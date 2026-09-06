@@ -51,7 +51,9 @@ fn parse_no_proxy_entry(entry: &str) -> Option<NoProxyEntry> {
         return None;
     }
 
-    if trimmed.starts_with('[') && let Some(closing) = trimmed.find(']') {
+    if trimmed.starts_with('[')
+        && let Some(closing) = trimmed.find(']')
+    {
         let host = trimmed[1..closing].to_string();
         let rest = &trimmed[closing + 1..];
         let port = rest
@@ -68,7 +70,9 @@ fn parse_no_proxy_entry(entry: &str) -> Option<NoProxyEntry> {
         });
     }
 
-    if let Some(colon) = trimmed.find(':') && colon == trimmed.rfind(':').unwrap_or(colon) {
+    if let Some(colon) = trimmed.find(':')
+        && colon == trimmed.rfind(':').unwrap_or(colon)
+    {
         let host = trimmed[..colon].to_string();
         if let Ok(port) = trimmed[colon + 1..].parse::<u16>() {
             return Some(NoProxyEntry { host, port });

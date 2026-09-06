@@ -51,21 +51,21 @@ crate::tagged_error!(LaneBusy, "LaneBusy", {
     operation_kind: String,
     message: String,
 });
-crate::tagged_error!(MissingIdentities, "MissingIdentities", {
+crate::tagged_error!(OperationMismatch, "OperationMismatch", {
     lane: String,
-    tools: Vec<String>,
-    models: Vec<String>,
+    expected_operation_id: String,
+    current_operation_id: Option<String>,
+    last_operation_id: Option<String>,
     message: String,
 });
 crate::tagged_error!(NoActiveRun, "NoActiveRun", { lane: String, message: String });
 crate::tagged_error!(NoActiveOperation, "NoActiveOperation", { lane: String, message: String });
 crate::tagged_error!(NothingToResume, "NothingToResume", { lane: String, message: String });
 crate::tagged_error!(InvalidMessage, "InvalidMessage", { lane: String, reason: String, message: String });
+crate::tagged_error!(InvalidNavigation, "InvalidNavigation", { lane: String, reason: String, message: String });
 crate::tagged_error!(UnknownSkill, "UnknownSkill", { name: String, message: String });
 crate::tagged_error!(UnknownTemplate, "UnknownTemplate", { name: String, message: String });
 crate::tagged_error!(UnknownTarget, "UnknownTarget", { target_id: String, message: String });
-crate::tagged_error!(UnknownQueueItem, "UnknownQueueItem", { lane: String, entry_id: String, message: String });
-crate::tagged_error!(LaneExists, "LaneExists", { lane: String, message: String });
 crate::tagged_error!(InvalidLane, "InvalidLane", { lane: String, reason: String, message: String });
 crate::tagged_error!(NothingToCompact, "NothingToCompact", { lane: String, message: String });
 crate::tagged_error!(Closed, "Closed", { message: String });
@@ -74,18 +74,17 @@ crate::tagged_error!(Closed, "Closed", { message: String });
 #[derive(Debug, Clone)]
 pub enum HarnessError {
     LaneBusy(LaneBusy),
-    MissingIdentities(MissingIdentities),
+    OperationMismatch(OperationMismatch),
     NoActiveRun(NoActiveRun),
     NoActiveOperation(NoActiveOperation),
     NothingToResume(NothingToResume),
+    NothingToCompact(NothingToCompact),
     InvalidMessage(InvalidMessage),
+    InvalidNavigation(InvalidNavigation),
     UnknownSkill(UnknownSkill),
     UnknownTemplate(UnknownTemplate),
     UnknownTarget(UnknownTarget),
-    UnknownQueueItem(UnknownQueueItem),
-    LaneExists(LaneExists),
     InvalidLane(InvalidLane),
-    NothingToCompact(NothingToCompact),
     Closed(Closed),
 }
 
@@ -116,18 +115,17 @@ macro_rules! harness_error_delegate {
 
 harness_error_delegate!(
     LaneBusy,
-    MissingIdentities,
+    OperationMismatch,
     NoActiveRun,
     NoActiveOperation,
     NothingToResume,
+    NothingToCompact,
     InvalidMessage,
+    InvalidNavigation,
     UnknownSkill,
     UnknownTemplate,
     UnknownTarget,
-    UnknownQueueItem,
-    LaneExists,
     InvalidLane,
-    NothingToCompact,
     Closed,
 );
 

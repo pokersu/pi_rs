@@ -43,7 +43,7 @@ pub fn bash_execution_to_text(msg: &crate::types::BashExecutionMessage) -> Strin
 /// 对应 `createBranchSummaryMessage`
 pub fn create_branch_summary_message(
     summary: String,
-    from_id: String,
+    from_id: Option<String>,
     timestamp: u64,
 ) -> BranchSummaryMessage {
     BranchSummaryMessage {

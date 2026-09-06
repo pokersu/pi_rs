@@ -91,7 +91,7 @@ pub struct CompactionEntry {
 pub struct BranchSummaryEntry {
     #[serde(flatten)]
     pub base: EntryBase,
-    pub from_id: String,
+    pub from_id: Option<String>,
     pub summary: String,
     pub details: Option<serde_json::Value>,
     pub usage: Option<Usage>,

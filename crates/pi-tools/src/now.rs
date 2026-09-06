@@ -43,6 +43,7 @@ pub fn create_now_tool() -> AgentTool {
             })
         }),
         execution_mode: None,
+        replay: None,
     }
 }
 
