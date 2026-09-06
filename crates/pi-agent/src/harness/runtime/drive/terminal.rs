@@ -36,18 +36,13 @@ pub async fn operation_cleanup_writes(
     let mut pending_ids = HashSet::new();
     if let OperationState::Tools { batch, .. } = state {
         for call in &batch.calls {
-            if matches!(
-                call,
-                crate::harness::session::types::ToolCall::OutcomeReady { .. }
-            ) {
-                if let crate::harness::session::types::ToolCall::OutcomeReady {
-                    result_entry_id,
-                    ..
-                } = call
-                {
-                    pending_ids.insert(result_entry_id.clone());
-                }
-            }
+            let crate::harness::session::types::ToolCall::OutcomeReady {
+                result_entry_id, ..
+            } = call
+            else {
+                continue;
+            };
+            pending_ids.insert(result_entry_id.clone());
         }
     }
 
