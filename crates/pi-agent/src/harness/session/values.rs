@@ -5,7 +5,14 @@
 
 use std::marker::PhantomData;
 
+use pi_ai::utils::assistant_message_frame::AssistantMessageFrame;
 use serde_json::Value as Json;
+
+use crate::harness::session::types::{
+    DurableStructuralPreparation, LaneConfiguration, LaneState, OperationMeta,
+    OperationResultRecord, OperationState, PendingEntry,
+};
+use crate::types::AgentToolResult;
 
 /// 对应 `StoredAddressBase`。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +45,54 @@ pub struct ValueList<T> {
     pub key: String,
     pub kind: StoredAddressKind,
     _marker: PhantomData<T>,
+}
+
+impl<T> Value<T> {
+    /// 地址擦除：类型参数不影响运行时地址。
+    pub fn erased(&self) -> Value<Json> {
+        Value {
+            namespace: self.namespace.clone(),
+            key: self.key.clone(),
+            kind: self.kind,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl Value<Json> {
+    /// 从已擦除地址重建强类型地址。
+    pub fn retype<T>(&self) -> Value<T> {
+        Value {
+            namespace: self.namespace.clone(),
+            key: self.key.clone(),
+            kind: self.kind,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T> ValueList<T> {
+    /// 地址擦除。
+    pub fn erased(&self) -> ValueList<Json> {
+        ValueList {
+            namespace: self.namespace.clone(),
+            key: self.key.clone(),
+            kind: self.kind,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl ValueList<Json> {
+    /// 从已擦除地址重建强类型地址。
+    pub fn retype<T>(&self) -> ValueList<T> {
+        ValueList {
+            namespace: self.namespace.clone(),
+            key: self.key.clone(),
+            kind: self.kind,
+            _marker: PhantomData,
+        }
+    }
 }
 
 /// 对应 `StoredValue<T>`。
@@ -213,36 +268,41 @@ pub fn resolve_list_read_options(options: ListReadOptions) -> ResolvedListReadOp
     }
 }
 
-// 预定义地址。类型在 `types.rs` 对齐后补充具体类型；当前以 `Json` 占位以保持可编译，
-// 后续逐步替换为 `LaneConfiguration`/`LaneState`/`OperationResultRecord` 等。
+// 预定义地址。类型与原版 `values.ts` 对齐：强类型地址（`Value<T>`）与读写操作的
+// 类型参数在编译期约束，运行时仅依赖 namespace/key。
 
-/// 对应 `branchTip`。
-pub fn branch_tip(branch: &str) -> Value<Json> {
+/// 对应 `branchTip`（`string | null`）。
+pub fn branch_tip(branch: &str) -> Value<Option<String>> {
     value("pi.branch.tip", branch)
 }
 
+/// 对应 `branchTipInventoryPrefix`：扫描全部 branch tip 的 prefix。
+pub fn branch_tip_inventory_prefix() -> Value<Option<String>> {
+    value("pi.branch.tip", "")
+}
+
 /// 对应 `laneConfig`。
-pub fn lane_config(lane: &str) -> Value<Json> {
+pub fn lane_config(lane: &str) -> Value<LaneConfiguration> {
     value("pi.lane.config", lane)
 }
 
 /// 对应 `laneState`。
-pub fn lane_state(lane: &str) -> Value<Json> {
+pub fn lane_state(lane: &str) -> Value<LaneState> {
     value("pi.lane.state", lane)
 }
 
 /// 对应 `operationResult`。
-pub fn operation_result(operation_id: &str) -> Value<Json> {
+pub fn operation_result(operation_id: &str) -> Value<OperationResultRecord> {
     value("pi.result", operation_id)
 }
 
 /// 对应 `operationMeta`。
-pub fn operation_meta(operation_id: &str) -> Value<Json> {
+pub fn operation_meta(operation_id: &str) -> Value<OperationMeta> {
     value("pi.op.meta", operation_id)
 }
 
 /// 对应 `operationState`。
-pub fn operation_state(operation_id: &str) -> Value<Json> {
+pub fn operation_state(operation_id: &str) -> Value<OperationState> {
     value("pi.op.state", operation_id)
 }
 
@@ -254,33 +314,68 @@ pub fn operation_tool_memo(operation_id: &str, invocation_id: &str, name: &str) 
     )
 }
 
+/// 对应 `operationToolArgs`。
+pub fn operation_tool_args(operation_id: &str, step_id: &str, source_index: usize) -> Value<Json> {
+    value(
+        "pi.op.tool_args",
+        &format!("{operation_id}:{step_id}:{source_index}"),
+    )
+}
+
 /// 对应 `operationToolArgsPrefix`。
-pub fn operation_tool_args_prefix(operation_id: &str) -> Value<Json> {
-    value("pi.op.tool_args", &format!("{operation_id}:"))
+pub fn operation_tool_args_prefix(operation_id: &str, step_id: Option<&str>) -> Value<Json> {
+    let key = match step_id {
+        None => format!("{operation_id}:"),
+        Some(step_id) => format!("{operation_id}:{step_id}:"),
+    };
+    value("pi.op.tool_args", &key)
 }
 
 /// 对应 `operationToolMemoPrefix`。
-pub fn operation_tool_memo_prefix(operation_id: &str) -> Value<Json> {
-    value("pi.op.tool_memo", &format!("{operation_id}:"))
+pub fn operation_tool_memo_prefix(operation_id: &str, invocation_id: Option<&str>) -> Value<Json> {
+    let key = match invocation_id {
+        None => format!("{operation_id}:"),
+        Some(invocation_id) => format!("{operation_id}:{invocation_id}:"),
+    };
+    value("pi.op.tool_memo", &key)
 }
 
 /// 对应 `operationPreparationPrefix`。
-pub fn operation_preparation_prefix(operation_id: &str) -> Value<Json> {
+pub fn operation_preparation_prefix(operation_id: &str) -> Value<DurableStructuralPreparation> {
     value("pi.op.preparation", &format!("{operation_id}:"))
 }
 
+/// 对应 `operationPreparation`。
+pub fn operation_preparation(
+    operation_id: &str,
+    task_id: &str,
+) -> Value<DurableStructuralPreparation> {
+    value("pi.op.preparation", &format!("{operation_id}:{task_id}"))
+}
+
 /// 对应 `pendingToolOutputPrefix`。
-pub fn pending_tool_output_prefix(operation_id: &str) -> Value<Json> {
+pub fn pending_tool_output_prefix(operation_id: &str) -> Value<AgentToolResult> {
     value("pi.pending.tool_output", &format!("{operation_id}:"))
 }
 
+/// 对应 `pendingToolOutput`。
+pub fn pending_tool_output(operation_id: &str, invocation_id: &str) -> Value<AgentToolResult> {
+    value(
+        "pi.pending.tool_output",
+        &format!("{operation_id}:{invocation_id}"),
+    )
+}
+
 /// 对应 `pendingEntry`。
-pub fn pending_entry(entry_id: &str) -> Value<Json> {
+pub fn pending_entry(entry_id: &str) -> Value<PendingEntry> {
     value("pi.pending.entry", entry_id)
 }
 
 /// 对应 `pendingAssistantFrames`。
-pub fn pending_assistant_frames(operation_id: &str, response_entry_id: &str) -> ValueList<Json> {
+pub fn pending_assistant_frames(
+    operation_id: &str,
+    response_entry_id: &str,
+) -> ValueList<AssistantMessageFrame> {
     list(
         "pi.pending.assistant_frame",
         &format!("{operation_id}:{response_entry_id}"),
@@ -288,11 +383,11 @@ pub fn pending_assistant_frames(operation_id: &str, response_entry_id: &str) -> 
 }
 
 /// 对应 `sessionName`。
-pub fn session_name() -> Value<Json> {
+pub fn session_name() -> Value<String> {
     value("pi.session.name", "")
 }
 
 /// 对应 `entryLabel`。
-pub fn entry_label(entry_id: &str) -> Value<Json> {
+pub fn entry_label(entry_id: &str) -> Value<String> {
     value("pi.entry.label", entry_id)
 }

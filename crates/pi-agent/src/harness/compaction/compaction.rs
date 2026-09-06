@@ -13,6 +13,7 @@ use crate::harness::compaction::utils::{
     FileOperations, compute_file_lists, create_file_ops, extract_file_ops_from_message,
     format_file_operations, serialize_conversation,
 };
+use crate::harness::context::Context as HarnessContext;
 use crate::harness::messages::{
     convert_to_llm, create_branch_summary_message, create_compaction_summary_message,
 };
@@ -459,7 +460,8 @@ fn get_message_from_entry_for_compaction(entry: &Entry) -> Option<AgentMessage> 
 }
 
 /// 对应 `CompactResult`：生成后待持久化为 compaction entry 的数据。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompactResult {
     pub summary: String,
     pub tokens_before: u64,
@@ -951,5 +953,277 @@ async fn generate_turn_prefix_summary(
     Ok(SummaryWithUsage {
         text: content_text(ContentTextInput::Blocks(&response.content), ""),
         usage: response.usage,
+    })
+}
+
+/// 对应 `SummaryRequest`：一次调用方拥有的单请求 summary 边界。
+pub type SummaryRequest = std::sync::Arc<
+    dyn Fn(
+            pi_ai::Context,
+            SimpleStreamOptions,
+            HarnessContext,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = AssistantMessage> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// 对应 `CompactGenerationOptions`。
+pub struct CompactGenerationOptions {
+    pub model: Model,
+    pub custom_instructions: Option<String>,
+    pub thinking_level: Option<ThinkingLevel>,
+}
+
+/// 对应 `createSummaryRequestOptions`。
+pub fn create_summary_request_options(
+    options: &SimpleStreamOptions,
+    context: &HarnessContext,
+) -> SimpleStreamOptions {
+    let mut next = options.clone();
+    next.stream.request.signal = context.abort_signal().cloned();
+    next.stream.cache_retention = Some(CacheRetention::None);
+    if next.stream.session_id.is_none() {
+        next.stream.session_id = Some(uuidv7());
+    }
+    next
+}
+
+/// 对应 `generateSummaryWithRequest`：通过调用方拥有的单请求边界生成 summary。
+#[allow(clippy::too_many_arguments)]
+pub async fn generate_summary_with_request(
+    current_messages: Vec<AgentMessage>,
+    model: &Model,
+    reserve_tokens: u64,
+    custom_instructions: Option<&str>,
+    previous_summary: Option<&str>,
+    thinking_level: Option<ThinkingLevel>,
+    request: &SummaryRequest,
+    context: &HarnessContext,
+) -> Result<SummaryWithUsage, CompactionError> {
+    let budget = ((reserve_tokens as f64) * 0.8).floor() as u64;
+    let max_tokens = if model.max_tokens > 0 {
+        budget.min(model.max_tokens)
+    } else {
+        budget
+    };
+
+    let mut base_prompt = if previous_summary.is_some() {
+        UPDATE_SUMMARIZATION_PROMPT
+    } else {
+        SUMMARIZATION_PROMPT
+    }
+    .to_string();
+    if let Some(instructions) = custom_instructions {
+        base_prompt = format!("{base_prompt}\n\nAdditional focus: {instructions}");
+    }
+
+    let llm_messages = convert_to_llm(current_messages);
+    let conversation_text = serialize_conversation(&llm_messages);
+    let mut prompt_text = format!("<conversation>\n{conversation_text}\n</conversation>\n\n");
+    if let Some(summary) = previous_summary {
+        prompt_text.push_str(&format!(
+            "<previous-summary>\n{summary}\n</previous-summary>\n\n"
+        ));
+    }
+    prompt_text.push_str(&base_prompt);
+
+    let summarization_messages = vec![Message::User(UserMessage {
+        content: UserContent::Blocks(vec![TextOrImageContent::Text(TextContent {
+            kind: TextKind,
+            text: prompt_text,
+            text_signature: None,
+        })]),
+        timestamp: pi_ai::utils::uuid::now_ms() as u64,
+    })];
+
+    let mut completion_options = SimpleStreamOptions::default();
+    completion_options.stream.max_tokens = Some(max_tokens);
+    if model.reasoning {
+        completion_options.reasoning = thinking_level.and_then(to_ai_thinking_level);
+    }
+
+    let response = request(
+        Context {
+            system_prompt: Some(SUMMARIZATION_SYSTEM_PROMPT.to_string()),
+            messages: summarization_messages,
+            tools: None,
+        },
+        create_summary_request_options(&completion_options, context),
+        context.clone(),
+    )
+    .await;
+
+    if response.stop_reason == StopReason::Aborted {
+        return Err(CompactionError::new(
+            CompactionErrorCode::Aborted,
+            response
+                .error_message
+                .unwrap_or_else(|| "Summarization aborted".to_string()),
+        ));
+    }
+    if response.stop_reason == StopReason::Error {
+        return Err(CompactionError::new(
+            CompactionErrorCode::SummarizationFailed,
+            format!(
+                "Summarization failed: {}",
+                response
+                    .error_message
+                    .unwrap_or_else(|| "Unknown error".to_string())
+            ),
+        ));
+    }
+
+    Ok(SummaryWithUsage {
+        text: content_text(ContentTextInput::Blocks(&response.content), ""),
+        usage: response.usage,
+    })
+}
+
+async fn generate_turn_prefix_summary_with_request(
+    messages: &[AgentMessage],
+    model: &Model,
+    reserve_tokens: u64,
+    thinking_level: Option<ThinkingLevel>,
+    request: &SummaryRequest,
+    context: &HarnessContext,
+) -> Result<SummaryWithUsage, CompactionError> {
+    let budget = ((reserve_tokens as f64) * 0.5).floor() as u64;
+    let max_tokens = if model.max_tokens > 0 {
+        budget.min(model.max_tokens)
+    } else {
+        budget
+    };
+
+    let llm_messages = convert_to_llm(messages.to_vec());
+    let conversation_text = serialize_conversation(&llm_messages);
+    let prompt_text = format!(
+        "<conversation>\n{conversation_text}\n</conversation>\n\n{TURN_PREFIX_SUMMARIZATION_PROMPT}"
+    );
+
+    let summarization_messages = vec![Message::User(UserMessage {
+        content: UserContent::Blocks(vec![TextOrImageContent::Text(TextContent {
+            kind: TextKind,
+            text: prompt_text,
+            text_signature: None,
+        })]),
+        timestamp: pi_ai::utils::uuid::now_ms() as u64,
+    })];
+
+    let mut completion_options = SimpleStreamOptions::default();
+    completion_options.stream.max_tokens = Some(max_tokens);
+    if model.reasoning {
+        completion_options.reasoning = thinking_level.and_then(to_ai_thinking_level);
+    }
+
+    let response = request(
+        Context {
+            system_prompt: Some(SUMMARIZATION_SYSTEM_PROMPT.to_string()),
+            messages: summarization_messages,
+            tools: None,
+        },
+        create_summary_request_options(&completion_options, context),
+        context.clone(),
+    )
+    .await;
+
+    if response.stop_reason == StopReason::Aborted {
+        return Err(CompactionError::new(
+            CompactionErrorCode::Aborted,
+            response
+                .error_message
+                .unwrap_or_else(|| "Turn prefix summarization aborted".to_string()),
+        ));
+    }
+    if response.stop_reason == StopReason::Error {
+        return Err(CompactionError::new(
+            CompactionErrorCode::SummarizationFailed,
+            format!(
+                "Turn prefix summarization failed: {}",
+                response
+                    .error_message
+                    .unwrap_or_else(|| "Unknown error".to_string())
+            ),
+        ));
+    }
+
+    Ok(SummaryWithUsage {
+        text: content_text(ContentTextInput::Blocks(&response.content), ""),
+        usage: response.usage,
+    })
+}
+
+/// 对应 `compactWithRequest`：通过调用方拥有的单请求边界执行 compaction。
+pub async fn compact_with_request(
+    preparation: &CompactionPreparation,
+    options: &CompactGenerationOptions,
+    request: &SummaryRequest,
+    context: &HarnessContext,
+) -> Result<CompactResult, CompactionError> {
+    let model = &options.model;
+    let (summary, summary_usage) =
+        if preparation.is_split_turn && !preparation.turn_prefix_messages.is_empty() {
+            let mut history_text = "No prior history.".to_string();
+            let mut history_usage: Option<Usage> = None;
+            if !preparation.messages_to_summarize.is_empty() {
+                let history_result = generate_summary_with_request(
+                    preparation.messages_to_summarize.clone(),
+                    model,
+                    preparation.settings.reserve_tokens,
+                    options.custom_instructions.as_deref(),
+                    preparation.previous_summary.as_deref(),
+                    options.thinking_level,
+                    request,
+                    context,
+                )
+                .await?;
+                history_text = history_result.text;
+                history_usage = Some(history_result.usage);
+            }
+            let turn_prefix_result = generate_turn_prefix_summary_with_request(
+                &preparation.turn_prefix_messages,
+                model,
+                preparation.settings.reserve_tokens,
+                options.thinking_level,
+                request,
+                context,
+            )
+            .await?;
+            let summary = format!(
+                "{history_text}\n\n---\n\n**Turn Context (split turn):**\n\n{}",
+                turn_prefix_result.text
+            );
+            let usage = match history_usage {
+                Some(history) => combine_usage(&history, &turn_prefix_result.usage),
+                None => turn_prefix_result.usage,
+            };
+            (summary, usage)
+        } else {
+            let summary_result = generate_summary_with_request(
+                preparation.messages_to_summarize.clone(),
+                model,
+                preparation.settings.reserve_tokens,
+                options.custom_instructions.as_deref(),
+                preparation.previous_summary.as_deref(),
+                options.thinking_level,
+                request,
+                context,
+            )
+            .await?;
+            (summary_result.text, summary_result.usage)
+        };
+
+    let (read_files, modified_files) = compute_file_lists(&preparation.file_ops);
+    let mut summary_with_files = summary;
+    summary_with_files.push_str(&format_file_operations(&read_files, &modified_files));
+
+    Ok(CompactResult {
+        summary: summary_with_files,
+        tokens_before: preparation.tokens_before,
+        usage: Some(summary_usage),
+        retained_tail: preparation.retained_tail.clone(),
+        details: CompactionDetails {
+            read_files,
+            modified_files,
+        },
     })
 }

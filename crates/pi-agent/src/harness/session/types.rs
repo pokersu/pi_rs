@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use pi_ai::Usage;
+use pi_ai::{AssistantMessage, Usage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
@@ -18,6 +18,10 @@ use crate::harness::session::values::{
 };
 use crate::harness::types::AgentHarnessStreamOptions;
 use crate::types::{AgentMessage, QueueMode, ThinkingLevel};
+
+/// 对应 `SettledAssistantMessage = AssistantMessage & { stopReason: Exclude<StopReason, "pending"> }`。
+/// Rust 中 `Exclude` 无法静态表达，故用 type alias 并在消费处按非 `pending` 约定处理。
+pub type SettledAssistantMessage = AssistantMessage;
 
 /// 对应 `EntryType`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -452,6 +456,34 @@ pub enum ToolCall {
         result_entry_id: String,
         terminate: bool,
     },
+}
+
+impl ToolCall {
+    pub fn source_index(&self) -> usize {
+        match self {
+            ToolCall::Planned { source_index, .. }
+            | ToolCall::EffectPending { source_index, .. }
+            | ToolCall::OutcomeReady { source_index, .. }
+            | ToolCall::Completed { source_index, .. } => *source_index,
+        }
+    }
+
+    pub fn result_entry_id(&self) -> String {
+        match self {
+            ToolCall::Planned {
+                result_entry_id, ..
+            }
+            | ToolCall::EffectPending {
+                result_entry_id, ..
+            }
+            | ToolCall::OutcomeReady {
+                result_entry_id, ..
+            }
+            | ToolCall::Completed {
+                result_entry_id, ..
+            } => result_entry_id.clone(),
+        }
+    }
 }
 
 /// 对应 `replay: "never" | "safe"`。

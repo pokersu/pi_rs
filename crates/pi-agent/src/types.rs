@@ -154,7 +154,8 @@ pub struct AfterToolCallResult {
 }
 
 /// 对应 `AgentToolResult<T>`（`details` 用 JSON 值表示）。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentToolResult {
     pub content: Vec<TextOrImageContent>,
     pub details: serde_json::Value,

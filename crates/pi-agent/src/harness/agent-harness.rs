@@ -1,48 +1,12 @@
 //! Rust 翻译自 packages/agent/src/harness/agent-harness.ts
 //!
-//! AgentHarness 整合层。TS 原版的操作方法大多为 `unavailable()` 占位（返回
-//! HarnessNotImplemented），此处同样保留占位语义，仅 getter/setter 为真实实现。
+//! AgentHarness 整合层：类型定义（AgentLane / AgentHarnessApi / 事件等）与
+//! 运行时接口。具体运行时实现在 `runtime/harness.rs`（`Harness` 类）与
+//! `runtime/lane.rs`（`LaneImpl`）。
 
-use pi_ai::{AssistantMessage, DeferredHandle, ImageContent, Model, SimpleStreamOptions, Usage};
+use pi_ai::{DeferredHandle, ImageContent, Model, Usage};
 
-use crate::types::{AgentMessage, AgentTool, QueueMode, ThinkingLevel};
-
-/// 对应 `HarnessFault`
-#[derive(Debug)]
-pub struct HarnessFault {
-    pub message: String,
-}
-
-impl std::fmt::Display for HarnessFault {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-impl std::error::Error for HarnessFault {}
-
-/// 对应 `HarnessClosed`
-#[derive(Debug)]
-pub struct HarnessClosed;
-
-impl std::fmt::Display for HarnessClosed {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "AgentHarness was closed while the operation was active")
-    }
-}
-impl std::error::Error for HarnessClosed {}
-
-/// 对应 `HarnessNotImplemented`
-#[derive(Debug)]
-pub struct HarnessNotImplemented {
-    pub operation: String,
-}
-
-impl std::fmt::Display for HarnessNotImplemented {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "AgentHarness.{} is not implemented yet", self.operation)
-    }
-}
-impl std::error::Error for HarnessNotImplemented {}
+use crate::types::{AgentMessage, ThinkingLevel};
 
 // 对应各 `TaggedError` 派生错误类（LaneBusy/MissingIdentities/... 等）。
 crate::tagged_error!(LaneBusy, "LaneBusy", {
@@ -136,85 +100,71 @@ pub struct OperationError {
     pub message: String,
 }
 
-/// 对应 `RunOutcome`
-#[derive(Debug, Clone)]
-pub enum RunOutcome {
-    Completed {
-        leaf_id: String,
-        final_entry_id: String,
-        final_message: AssistantMessage,
-    },
-    Aborted {
-        leaf_id: String,
-        final_entry_id: String,
-        final_message: AssistantMessage,
-    },
-    Failed {
-        leaf_id: String,
-        error: OperationError,
-        final_entry_id: Option<String>,
-        final_message: Option<AssistantMessage>,
-    },
-    Suspended {
-        leaf_id: String,
-        final_entry_id: String,
-        deferred: DeferredHandle,
-    },
+/// 对应 `SuspendedRun`。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SuspendedRun {
+    pub operation_id: String,
+    pub deferred: DeferredHandle,
 }
 
-/// 对应 `CompactionOutcome`
+/// 对应 `RunResult` 的 Ok 联合：settled 或 suspended。
 #[derive(Debug, Clone)]
-pub enum CompactionOutcome {
-    Completed {
-        leaf_id: String,
-    },
-    Declined {
-        leaf_id: String,
-    },
-    Aborted {
-        leaf_id: String,
-    },
-    Failed {
-        leaf_id: String,
-        error: OperationError,
-    },
+pub enum RunSettlement {
+    Settled(OperationResultRecord),
+    Suspended(SuspendedRun),
 }
 
-/// 对应 `NavigationOutcome`
-#[derive(Debug, Clone)]
-pub enum NavigationOutcome {
-    Completed {
-        new_leaf_id: Option<String>,
-    },
-    Declined {
-        leaf_id: Option<String>,
-    },
-    Aborted {
-        leaf_id: Option<String>,
-    },
-    Failed {
-        leaf_id: Option<String>,
-        error: OperationError,
-    },
-}
+pub type RunResult = Result<RunSettlement, HarnessError>;
 
-/// 对应 `ResumeOutcome`
-#[allow(clippy::large_enum_variant)]
+/// 对应 `CompactionResult` 的 Ok。
 #[derive(Debug, Clone)]
-pub enum ResumeOutcome {
-    Run {
-        run_id: String,
-        outcome: RunOutcome,
-    },
-    Compaction {
-        run_id: String,
-        outcome: CompactionOutcome,
-    },
-    Navigation {
-        run_id: String,
-        outcome: NavigationOutcome,
-    },
+pub struct CompactionSettlement {
+    pub compaction: OperationResultRecord,
+    pub run: Option<RunSettlement>,
 }
+pub type CompactionResult = Result<CompactionSettlement, HarnessError>;
+
+/// 对应 `NavigationResult` 的 Ok。
+#[derive(Debug, Clone)]
+pub struct NavigationSettlement {
+    pub navigation: OperationResultRecord,
+    pub run: Option<RunSettlement>,
+}
+pub type NavigationResult = Result<NavigationSettlement, HarnessError>;
+
+pub type ResumeResult = RunResult;
+
+/// 对应 `QueueResult` 的 Ok。
+#[derive(Debug, Clone)]
+pub struct QueueEntry {
+    pub entry_id: String,
+}
+pub type QueueResult = Result<QueueEntry, HarnessError>;
+
+/// 对应 `CancelQueuedResult` 的 Ok。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelQueuedKind {
+    Cancelled,
+    AlreadyConsumed,
+    NotFound,
+}
+pub type CancelQueuedResult = Result<CancelQueuedKind, HarnessError>;
+
+/// 对应 `AbortResult` 的 Ok。
+#[derive(Debug, Clone)]
+pub struct AbortOutcome {
+    pub operation_id: String,
+    pub steer: Vec<AgentMessage>,
+    pub follow_up: Vec<AgentMessage>,
+}
+pub type AbortResult = Result<AbortOutcome, HarnessError>;
+
+/// 对应 `RecordUsageResult` 的 Ok。
+#[derive(Debug, Clone)]
+pub struct RecordUsageOutcome {
+    pub usage_id: String,
+}
+pub type RecordUsageResult = Result<RecordUsageOutcome, HarnessError>;
 
 /// 对应 `NavigateOptions`
 #[derive(Debug, Clone, Default)]
@@ -224,29 +174,17 @@ pub struct NavigateOptions {
     pub label: Option<String>,
 }
 
-/// 对应 `SuspendedOperation`
-#[derive(Debug, Clone)]
-pub struct SuspendedOperation {
-    pub lane: String,
-    pub kind: String,
-    pub id: String,
-    pub started_at: u64,
-    pub reason: String,
-    pub prompt: Option<Vec<AgentMessage>>,
-    pub deferred: Option<DeferredHandle>,
-    pub missing_tools: Vec<String>,
-    pub missing_models: Vec<String>,
-}
-
 /// 对应 `LaneInfo`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LaneInfo {
     pub name: String,
     pub leaf_id: Option<String>,
     pub operation: Option<LaneOperationInfo>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LaneOperationInfo {
     pub id: String,
     pub kind: String,
@@ -260,25 +198,7 @@ pub struct QueuedItem {
     pub message: AgentMessage,
 }
 
-/// 对应 `LaneSnapshot`
-#[derive(Debug, Clone)]
-pub struct LaneSnapshot {
-    pub lane: String,
-    pub transcript: Vec<crate::harness::session::types::Entry>,
-    pub leaf_id: Option<String>,
-    pub operation: Option<LaneOperationInfo>,
-    pub steer: Vec<QueuedItem>,
-    pub follow_up: Vec<QueuedItem>,
-    pub next_run: Vec<QueuedItem>,
-    pub faulted: bool,
-}
-
-/// 对应 `SessionSnapshot`
-#[derive(Debug, Clone)]
-pub struct SessionSnapshot {
-    pub lanes: Vec<LaneInfo>,
-    pub faulted: bool,
-}
+pub use crate::harness::harness_event::{LaneQueuedItem, LaneSnapshot, SessionSnapshot};
 
 /// 对应 `ActionInfo`
 #[derive(Debug, Clone)]
@@ -330,173 +250,13 @@ pub enum ActionInfo {
     },
 }
 
-/// 对应 `AgentHarnessOptions`
-#[derive(Clone)]
-pub struct AgentHarnessOptions {
-    pub model: Model,
-    pub thinking_level: Option<ThinkingLevel>,
-    pub active_tool_names: Option<Vec<String>>,
-    pub tools: Option<Vec<AgentTool>>,
-    pub system_prompt: Option<String>,
-    pub steering_mode: Option<QueueMode>,
-    pub follow_up_mode: Option<QueueMode>,
-}
-
-/// 对应 `AgentHarness` 类（操作方法是占位，getter/setter 是真实实现）。
-pub struct AgentHarness {
-    pub name: &'static str,
-    model: Model,
-    thinking_level: ThinkingLevel,
-    active_tool_names: Vec<String>,
-    tools: Vec<AgentTool>,
-    closed: bool,
-    steering_mode: QueueMode,
-    follow_up_mode: QueueMode,
-}
-
-impl AgentHarness {
-    /// 对应 `create`
-    pub async fn create(
-        options: AgentHarnessOptions,
-    ) -> Result<(AgentHarness, Vec<SuspendedOperation>), HarnessError> {
-        Ok((Self::new(options), Vec::new()))
-    }
-
-    fn new(options: AgentHarnessOptions) -> Self {
-        Self {
-            name: "main",
-            model: options.model,
-            thinking_level: options.thinking_level.unwrap_or(ThinkingLevel::Off),
-            active_tool_names: options.active_tool_names.unwrap_or_else(|| {
-                options
-                    .tools
-                    .as_ref()
-                    .map(|t| t.iter().map(|x| x.name().to_string()).collect())
-                    .unwrap_or_default()
-            }),
-            tools: options.tools.unwrap_or_default(),
-            closed: false,
-            steering_mode: options.steering_mode.unwrap_or(QueueMode::OneAtATime),
-            follow_up_mode: options.follow_up_mode.unwrap_or(QueueMode::OneAtATime),
-        }
-    }
-
-    fn unavailable<T>(&self, operation: &str) -> Result<T, HarnessError> {
-        if self.closed {
-            panic!("{}", HarnessClosed);
-        }
-        panic!(
-            "{}",
-            HarnessNotImplemented {
-                operation: operation.to_string()
-            }
-        );
-    }
-
-    /// 对应 `getModel`
-    pub async fn get_model(&self) -> Model {
-        self.model.clone()
-    }
-
-    /// 对应 `setModel`
-    pub async fn set_model(&mut self, model: Model) {
-        self.model = model;
-    }
-
-    /// 对应 `getThinkingLevel`
-    pub async fn get_thinking_level(&self) -> ThinkingLevel {
-        self.thinking_level
-    }
-
-    /// 对应 `setThinkingLevel`
-    pub async fn set_thinking_level(&mut self, level: ThinkingLevel) {
-        self.thinking_level = level;
-    }
-
-    /// 对应 `getActiveTools`
-    pub async fn get_active_tools(&self) -> Vec<String> {
-        self.active_tool_names.clone()
-    }
-
-    /// 对应 `setActiveTools`
-    pub async fn set_active_tools(&mut self, names: Vec<String>) {
-        self.active_tool_names = names;
-    }
-
-    /// 对应 `getTools`
-    pub async fn get_tools(&self) -> Vec<AgentTool> {
-        self.tools.clone()
-    }
-
-    /// 对应 `setTools`
-    pub async fn set_tools(&mut self, tools: Vec<AgentTool>, active_names: Option<Vec<String>>) {
-        self.active_tool_names =
-            active_names.unwrap_or_else(|| tools.iter().map(|t| t.name().to_string()).collect());
-        self.tools = tools;
-    }
-
-    /// 对应 `getSteeringMode`
-    pub async fn get_steering_mode(&self) -> QueueMode {
-        self.steering_mode
-    }
-
-    /// 对应 `setSteeringMode`
-    pub async fn set_steering_mode(&mut self, mode: QueueMode) {
-        self.steering_mode = mode;
-    }
-
-    /// 对应 `getFollowUpMode`
-    pub async fn get_follow_up_mode(&self) -> QueueMode {
-        self.follow_up_mode
-    }
-
-    /// 对应 `setFollowUpMode`
-    pub async fn set_follow_up_mode(&mut self, mode: QueueMode) {
-        self.follow_up_mode = mode;
-    }
-
-    /// 对应 `close`
-    pub async fn close(&mut self) {
-        self.closed = true;
-    }
-
-    /// 对应 `prompt`（占位）。
-    pub async fn prompt(&self, _input: AgentMessage) -> Result<(), HarnessError> {
-        self.unavailable("prompt")
-    }
-
-    /// 对应 `steer`（占位）。
-    pub async fn steer(&self, _input: AgentMessage) -> Result<(), HarnessError> {
-        self.unavailable("steer")
-    }
-
-    /// 对应 `followUp`（占位）。
-    pub async fn follow_up(&self, _input: AgentMessage) -> Result<(), HarnessError> {
-        self.unavailable("followUp")
-    }
-
-    /// 对应 `compact`（占位）。
-    pub async fn compact(&self) -> Result<(), HarnessError> {
-        self.unavailable("compact")
-    }
-
-    /// 对应 `resume`（占位）。
-    pub async fn resume(&self) -> Result<(), HarnessError> {
-        self.unavailable("resume")
-    }
-}
-
-// 保留未使用类型引用，避免告警。
-#[allow(unused)]
-fn _unused(_: ImageContent, _: SimpleStreamOptions, _: Usage) {}
-
 // ---------------------------------------------------------------------------
 // R1 接口类型（runtime 驱动依赖，后续逐步对齐原版完整定义）。
 // ---------------------------------------------------------------------------
 
 use serde_json::Value as Json;
 
-use crate::harness::session::types::OperationResultRecord;
+use crate::harness::session::types::{BranchScan, Entry, OperationResultRecord};
 use crate::harness::types::{PromptTemplate, Skill};
 
 /// 对应 `ModelIdentity`。
@@ -607,14 +367,39 @@ pub struct OperationAdmission {
 }
 
 /// 对应 `Resources`。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Resources {
     pub skills: Vec<Skill>,
     pub prompt_templates: Vec<PromptTemplate>,
 }
 
-/// 对应 `HarnessEvent`（简化：结构化 JSON）。
-pub type HarnessEvent = Json;
+/// 对应 `HarnessEvent`（29 种强类型事件，见 harness-event.rs）。
+pub use crate::harness::harness_event::HarnessEvent;
+
+/// 对应 `EventListener`（同步或异步事件回调，附带 context）。
+pub type HarnessEventListener = std::sync::Arc<
+    dyn Fn(
+            HarnessEvent,
+            crate::harness::context::Context,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// 对应 `WatchHandle<T>`：快照订阅句柄。
+pub trait WatchHandle<T>: Send + Sync
+where
+    T: Clone + Send + Sync,
+{
+    fn snapshot(&self) -> T;
+    fn start(&self, listener: HarnessEventListener);
+    fn resnapshot<'a>(
+        &'a self,
+        context: &'a crate::harness::context::Context,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, String>> + Send + 'a>>;
+    fn unsubscribe(&self);
+}
 
 /// 对应 `AgentLane`（runtime 提供实现）。
 #[async_trait::async_trait]
@@ -635,6 +420,149 @@ pub trait AgentLane: Send + Sync {
         operation_id: String,
         context: &crate::harness::context::Context,
     ) -> Result<Json, HarnessError>;
+
+    async fn get_tip_id(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<Option<String>, HarnessError>;
+    async fn find_entries(
+        &self,
+        query: Option<BranchScan>,
+        context: &crate::harness::context::Context,
+    ) -> Result<Vec<Entry>, HarnessError>;
+    async fn find_entry(
+        &self,
+        query: Option<BranchScan>,
+        context: &crate::harness::context::Context,
+    ) -> Result<Option<Entry>, HarnessError>;
+    async fn append_message(
+        &self,
+        message: AgentMessage,
+        context: &crate::harness::context::Context,
+    ) -> Result<String, HarnessError>;
+    async fn append_custom_entry(
+        &self,
+        custom_type: String,
+        data: Option<Json>,
+        context: &crate::harness::context::Context,
+    ) -> Result<String, HarnessError>;
+    async fn get_result(
+        &self,
+        operation_id: String,
+        context: &crate::harness::context::Context,
+    ) -> Result<Option<OperationResultRecord>, HarnessError>;
+    async fn inspect_execution(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<Json, HarnessError>;
+    async fn prompt(
+        &self,
+        prompt: Json,
+        images: Option<Vec<ImageContent>>,
+        context: &crate::harness::context::Context,
+    ) -> RunResult;
+    async fn skill(
+        &self,
+        name: String,
+        additional_instructions: Option<String>,
+        context: &crate::harness::context::Context,
+    ) -> RunResult;
+    async fn prompt_from_template(
+        &self,
+        name: String,
+        args: Option<Vec<String>>,
+        context: &crate::harness::context::Context,
+    ) -> RunResult;
+    async fn compact(
+        &self,
+        custom_instructions: Option<String>,
+        context: &crate::harness::context::Context,
+    ) -> CompactionResult;
+    async fn navigate_tree(
+        &self,
+        target_id: Option<String>,
+        options: Option<NavigateOptions>,
+        context: &crate::harness::context::Context,
+    ) -> NavigationResult;
+    async fn resume(&self, context: &crate::harness::context::Context) -> ResumeResult;
+    async fn abort(&self, context: &crate::harness::context::Context) -> AbortResult;
+    async fn steer(
+        &self,
+        message: Json,
+        images: Option<Vec<ImageContent>>,
+        context: &crate::harness::context::Context,
+    ) -> QueueResult;
+    async fn follow_up(
+        &self,
+        message: Json,
+        images: Option<Vec<ImageContent>>,
+        context: &crate::harness::context::Context,
+    ) -> QueueResult;
+    async fn next_run(
+        &self,
+        message: Json,
+        images: Option<Vec<ImageContent>>,
+        context: &crate::harness::context::Context,
+    ) -> QueueResult;
+    async fn cancel_queued(
+        &self,
+        entry_id: String,
+        context: &crate::harness::context::Context,
+    ) -> CancelQueuedResult;
+    async fn record_usage(
+        &self,
+        usage: Usage,
+        entry_id: Option<String>,
+        details: Option<Json>,
+        context: &crate::harness::context::Context,
+    ) -> RecordUsageResult;
+    async fn wait_for_idle(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<(), HarnessError>;
+    async fn run_when_idle(
+        &self,
+        callback: std::sync::Arc<
+            dyn Fn(
+                    crate::harness::context::Context,
+                )
+                    -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                + Send
+                + Sync,
+        >,
+        context: &crate::harness::context::Context,
+    ) -> Result<(), HarnessError>;
+    async fn get_model(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<Option<Model>, HarnessError>;
+    async fn set_model(
+        &self,
+        model: ModelIdentity,
+        context: &crate::harness::context::Context,
+    ) -> Result<(), HarnessError>;
+    async fn get_thinking_level(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<ThinkingLevel, HarnessError>;
+    async fn set_thinking_level(
+        &self,
+        level: ThinkingLevel,
+        context: &crate::harness::context::Context,
+    ) -> Result<(), HarnessError>;
+    async fn get_active_tools(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<Vec<String>, HarnessError>;
+    async fn set_active_tools(
+        &self,
+        names: Vec<String>,
+        context: &crate::harness::context::Context,
+    ) -> Result<(), HarnessError>;
+    async fn watch(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<std::sync::Arc<dyn WatchHandle<LaneSnapshot>>, HarnessError>;
 }
 
 /// 对应 `AgentHarness`（runtime 提供实现）。
@@ -650,6 +578,93 @@ pub trait AgentHarnessApi: Send + Sync {
         context: &crate::harness::context::Context,
     ) -> Result<Vec<OpenOperation>, HarnessError>;
     async fn close(&self, context: &crate::harness::context::Context) -> Result<(), HarnessError>;
+    async fn get_name(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<Option<String>, HarnessError>;
+    async fn set_name(
+        &self,
+        name: Option<String>,
+        context: &crate::harness::context::Context,
+    ) -> Result<(), HarnessError>;
+    async fn get_label(
+        &self,
+        target_id: &str,
+        context: &crate::harness::context::Context,
+    ) -> Result<Option<String>, HarnessError>;
+    async fn set_label(
+        &self,
+        target_id: &str,
+        label: Option<String>,
+        context: &crate::harness::context::Context,
+    ) -> Result<(), HarnessError>;
+    async fn get_tools(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<Vec<crate::harness::types::AgentHarnessTool>, HarnessError>;
+    async fn set_tools(
+        &self,
+        tools: Vec<crate::harness::types::AgentHarnessTool>,
+        context: &crate::harness::context::Context,
+    ) -> Result<(), HarnessError>;
+    async fn get_resources(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<Resources, HarnessError>;
+    async fn set_resources(
+        &self,
+        resources: Resources,
+        context: &crate::harness::context::Context,
+    ) -> Result<(), HarnessError>;
+    async fn get_stream_options(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<crate::harness::types::AgentHarnessStreamOptions, HarnessError>;
+    async fn set_stream_options(
+        &self,
+        options: crate::harness::types::AgentHarnessStreamOptions,
+        context: &crate::harness::context::Context,
+    ) -> Result<(), HarnessError>;
+    async fn get_retry_policy(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<pi_ai::utils::retry::RetryPolicy, HarnessError>;
+    async fn set_retry_policy(
+        &self,
+        policy: pi_ai::utils::retry::RetryPolicy,
+        context: &crate::harness::context::Context,
+    ) -> Result<(), HarnessError>;
+    async fn get_compaction_settings(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<crate::harness::compaction::compaction::CompactionSettings, HarnessError>;
+    async fn set_compaction_settings(
+        &self,
+        settings: crate::harness::compaction::compaction::CompactionSettings,
+        context: &crate::harness::context::Context,
+    ) -> Result<(), HarnessError>;
+    async fn get_steering_mode(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<crate::types::QueueMode, HarnessError>;
+    async fn set_steering_mode(
+        &self,
+        mode: crate::types::QueueMode,
+        context: &crate::harness::context::Context,
+    ) -> Result<(), HarnessError>;
+    async fn get_follow_up_mode(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<crate::types::QueueMode, HarnessError>;
+    async fn set_follow_up_mode(
+        &self,
+        mode: crate::types::QueueMode,
+        context: &crate::harness::context::Context,
+    ) -> Result<(), HarnessError>;
+    async fn watch_session(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<Json, HarnessError>;
 }
 
 use std::sync::Arc;

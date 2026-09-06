@@ -1,9 +1,10 @@
 //! Rust 翻译自 packages/agent/src/harness/tools/edit-diff.ts
 //!
-//! edit 工具的共享 diff 计算工具。注：TS 的 `normalize("NFKC")` 归一化在 Rust 中
-//! 未引入 `unicode-normalization` 依赖，此处仅做 Unicode 字符替换（引号/破折号/空格）。
+//! edit 工具的共享 diff 计算工具。`normalize("NFKC")` 归一化通过
+//! `unicode-normalization` crate 实现，与引号/破折号/空格替换对齐原版。
 
 use similar::{ChangeTag, TextDiff};
+use unicode_normalization::UnicodeNormalization;
 
 /// 对应 `detectLineEnding`
 pub fn detect_line_ending(content: &str) -> &'static str {
@@ -36,8 +37,9 @@ pub fn restore_line_endings(text: &str, ending: &str) -> String {
     }
 }
 
-/// 对应 `normalizeForFuzzyMatch`（省略 NFKC）。
+/// 对应 `normalizeForFuzzyMatch`。
 pub fn normalize_for_fuzzy_match(text: &str) -> String {
+    let text: String = text.nfkc().collect();
     let mut result = String::new();
     for line in text.split('\n') {
         result.push_str(line.trim_end());

@@ -14,8 +14,8 @@ pub mod read;
 pub mod tool_context;
 pub mod write;
 
-pub use bash::create_bash_tool;
+pub use bash::{BashExecution, BashPrepare, BashToolOptions, create_bash_tool};
 pub use edit::create_edit_tool;
-pub use read::create_read_tool;
+pub use read::{ReadImageProcessor, ReadImageProcessorResult, ReadToolOptions, create_read_tool};
 pub use tool_context::ExecutionToolContext;
 pub use write::create_write_tool;

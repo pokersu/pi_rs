@@ -373,6 +373,17 @@ pub struct DeferredHandle {
     pub data: Option<serde_json::Value>,
 }
 
+/// 对应 `DeferredFetchOptions`（`ProviderRequestOptions` + `wait`）。
+#[derive(Debug, Clone, Default)]
+pub struct DeferredFetchOptions {
+    pub request: ProviderRequestOptions,
+    /// 最大 provider long-poll 时长（毫秒）。默认 0，只做一次状态检查。
+    pub wait: Option<u64>,
+}
+
+/// 对应 `DeferredCancelOptions`。
+pub type DeferredCancelOptions = ProviderRequestOptions;
+
 /// 对应 `UserMessage`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

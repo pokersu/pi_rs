@@ -23,6 +23,27 @@ use crate::harness::session::values::{
 };
 use crate::types::AgentMessage;
 
+/// 对应 `SessionInvariantError`：durable session 状态内部不一致，无法安全推进。
+#[derive(Debug)]
+pub struct SessionInvariantError {
+    pub message: String,
+}
+
+impl SessionInvariantError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for SessionInvariantError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+impl std::error::Error for SessionInvariantError {}
+
 struct UuidV7IdGenerator;
 
 impl IdGenerator for UuidV7IdGenerator {
@@ -298,7 +319,7 @@ impl Session for StorageBackedSession {
     }
     async fn get_name(&self, context: &Context) -> Result<Option<String>, String> {
         Ok(self
-            .get_value(&session_name(), context)
+            .get_value(&session_name().erased(), context)
             .await?
             .map(|s| s.value)
             .and_then(|v| v.as_str().map(String::from)))
@@ -309,7 +330,7 @@ impl Session for StorageBackedSession {
         context: &Context,
     ) -> Result<Option<String>, String> {
         Ok(self
-            .get_value(&entry_label(target_id), context)
+            .get_value(&entry_label(target_id).erased(), context)
             .await?
             .map(|s| s.value)
             .and_then(|v| v.as_str().map(String::from)))
@@ -357,7 +378,11 @@ impl Session for StorageBackedSession {
         context: &Context,
     ) -> Result<Option<Arc<dyn Branch>>, String> {
         Self::assert_valid_branch_name(name)?;
-        if self.get_value(&branch_tip(name), context).await?.is_none() {
+        if self
+            .get_value(&branch_tip(name).erased(), context)
+            .await?
+            .is_none()
+        {
             return Ok(None);
         }
         Ok(Some(self.get_or_create_branch_object(name)))
@@ -377,7 +402,11 @@ impl Session for StorageBackedSession {
                 let name = name_owned.clone();
                 let at = at.clone();
                 Box::pin(async move {
-                    if mutator.get_value(&branch_tip(&name), &ctx).await?.is_some() {
+                    if mutator
+                        .get_value(&branch_tip(&name).erased(), &ctx)
+                        .await?
+                        .is_some()
+                    {
                         return Err(format!("Branch already exists: {name}"));
                     }
                     if let Some(at) = &at
@@ -504,9 +533,9 @@ impl Session for StorageBackedSession {
     }
     async fn set_name(&self, name: Option<String>, context: &Context) -> Result<(), String> {
         match name {
-            None => self.delete_value(&session_name(), context).await,
+            None => self.delete_value(&session_name().erased(), context).await,
             Some(n) => {
-                self.set_value(&session_name(), Json::String(n), context)
+                self.set_value(&session_name().erased(), Json::String(n), context)
                     .await
             }
         }
@@ -517,7 +546,7 @@ impl Session for StorageBackedSession {
         label: Option<String>,
         context: &Context,
     ) -> Result<(), String> {
-        let address = entry_label(target_id);
+        let address = entry_label(target_id).erased();
         match label {
             None => self.delete_value(&address, context).await,
             Some(l) => self.set_value(&address, Json::String(l), context).await,
@@ -575,7 +604,7 @@ impl StorageBackedSession {
         name: &str,
         context: &Context,
     ) -> Result<Option<String>, String> {
-        match self.get_value(&branch_tip(name), context).await? {
+        match self.get_value(&branch_tip(name).erased(), context).await? {
             None => Err(format!("Unknown branch: {name}")),
             Some(stored) => Ok(serde_json::from_value(stored.value).unwrap_or(None)),
         }
@@ -603,7 +632,7 @@ impl StorageBackedSession {
                 let id = id_for_closure.clone();
                 let entry = entry.clone();
                 Box::pin(async move {
-                    let tip = mutator.get_value(&branch_tip(&name), &ctx).await?;
+                    let tip = mutator.get_value(&branch_tip(&name).erased(), &ctx).await?;
                     let tip = tip.ok_or_else(|| format!("Unknown branch: {name}"))?;
                     let parent_id: Option<String> =
                         serde_json::from_value(tip.value).unwrap_or(None);

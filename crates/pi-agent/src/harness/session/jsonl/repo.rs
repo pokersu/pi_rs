@@ -4,15 +4,17 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::harness::context::Context;
+use crate::harness::session::fork::create_fork_snapshot;
+use crate::harness::session::jsonl::codec::{JsonlParsedSessionHeader, parse_jsonl_session_header};
 use crate::harness::session::jsonl::storage::{JsonlStorage, JsonlStorageOptions};
 use crate::harness::session::jsonl::types::{
     JSONL_STORAGE_VERSION, JsonlSessionCreateOptions, JsonlSessionMetadata, JsonlStorageHeader,
 };
 use crate::harness::session::session::StorageBackedSession;
 use crate::harness::session::types::{
-    ForkOptions, Session, SessionCreateOptions, SessionMetadata, SessionRepo,
+    ForkOptions, Session, SessionCreateOptions, SessionMetadata, SessionRepo, Storage,
 };
-use crate::harness::types::FileSystem;
+use crate::harness::types::{FileKind, FileSystem};
 
 fn session_directory_name(cwd: &str) -> String {
     let cleaned = cwd
@@ -79,6 +81,38 @@ impl JsonlSessionRepo {
             )
             .await
             .map_err(|e| e.message)
+    }
+
+    /// 对应 `readSessionMetadata`：读取文件首行 header，构造 `SessionMetadata`。
+    async fn read_session_metadata(
+        &self,
+        file: &crate::harness::types::FileInfo,
+        context: &Context,
+    ) -> Result<Option<SessionMetadata>, String> {
+        let lines = self
+            .file_system
+            .read_text_lines(&file.path, Some(1), context)
+            .await
+            .map_err(|e| e.message)?;
+        let Some(first) = lines.first() else {
+            return Ok(None);
+        };
+        let parsed = match parse_jsonl_session_header(first) {
+            Ok(parsed) => parsed,
+            Err(_) => return Ok(None),
+        };
+        let JsonlParsedSessionHeader::V4 { header } = parsed else {
+            // V3Legacy 需要 legacy-v3 迁移（未复刻），跳过。
+            return Ok(None);
+        };
+        Ok(Some(SessionMetadata {
+            id: header.id,
+            created_at: header.created_at,
+            storage_version: header.storage_version,
+            cwd: Some(header.cwd),
+            parent_session_id: header.parent_session_id,
+            legacy_parent_session_path: header.legacy_parent_session_path,
+        }))
     }
 }
 
@@ -209,9 +243,51 @@ impl SessionRepo for JsonlSessionRepo {
         Ok(Arc::new(StorageBackedSession::new(metadata, storage, None)))
     }
 
-    async fn list(&self, _context: &Context) -> Result<Vec<SessionMetadata>, String> {
-        // 简化：返回空列表（完整目录扫描后续补）。
-        Ok(Vec::new())
+    async fn list(&self, context: &Context) -> Result<Vec<SessionMetadata>, String> {
+        if *self.closed.lock().unwrap() {
+            return Err("JsonlSessionRepo is closed".to_string());
+        }
+        let root = self.root(context).await?;
+        let exists = self
+            .file_system
+            .exists(&root, context)
+            .await
+            .map_err(|e| e.message)?;
+        if !exists {
+            return Ok(Vec::new());
+        }
+        let directories = self
+            .file_system
+            .list_dir(&root, context)
+            .await
+            .map_err(|e| e.message)?;
+        let mut metadata: Vec<SessionMetadata> = Vec::new();
+        for directory in directories {
+            if directory.kind != FileKind::Directory {
+                continue;
+            }
+            let files = self
+                .file_system
+                .list_dir(&directory.path, context)
+                .await
+                .map_err(|e| e.message)?;
+            for file in files {
+                if file.kind == FileKind::Directory || !file.name.ends_with(".jsonl") {
+                    continue;
+                }
+                if let Some(discovered) = self.read_session_metadata(&file, context).await? {
+                    metadata.push(discovered);
+                }
+            }
+        }
+        metadata.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then(left.id.cmp(&right.id))
+                .then(left.cwd.cmp(&right.cwd))
+        });
+        Ok(metadata)
     }
 
     async fn delete(&self, metadata: SessionMetadata, context: &Context) -> Result<(), String> {
@@ -245,17 +321,94 @@ impl SessionRepo for JsonlSessionRepo {
         options: ForkOptions,
         context: &Context,
     ) -> Result<Arc<dyn Session>, String> {
-        // 简化：内存 fork（完整 JSONL fork 后续补）。
-        let source_storage = self
-            .open_sessions
+        if *self.closed.lock().unwrap() {
+            return Err("JsonlSessionRepo is closed".to_string());
+        }
+        let source_storage = self.open_sessions.lock().unwrap().get(&source.id).cloned();
+        let source_snapshot = match source_storage {
+            Some(storage) => storage.capture_fork_source()?,
+            None => {
+                let path = source
+                    .cwd
+                    .clone()
+                    .map(|cwd| {
+                        let root = self.sessions_root_input.clone();
+                        let directory = session_directory_name(&cwd);
+                        format!(
+                            "{root}/{directory}/{}",
+                            session_file_name(source.created_at, &source.id)
+                        )
+                    })
+                    .ok_or_else(|| "Session metadata missing cwd".to_string())?;
+                let storage = Arc::new(
+                    JsonlStorage::open(
+                        JsonlStorageOptions {
+                            file_system: Arc::clone(&self.file_system),
+                            path,
+                        },
+                        context,
+                    )
+                    .await?,
+                );
+                let snapshot = storage.capture_fork_source()?;
+                let _ = storage.close(context).await;
+                snapshot
+            }
+        };
+        let snapshot = create_fork_snapshot(&source_snapshot, &options);
+        let id = match &options {
+            ForkOptions::Branch { id, .. } | ForkOptions::Tree { id } => id.clone(),
+        }
+        .unwrap_or_else(pi_ai::uuidv7);
+        let cwd = source.cwd.clone().unwrap_or_else(|| ".".to_string());
+        let created_at = pi_ai::utils::uuid::now_ms() as u64;
+        let root = self.root(context).await?;
+        let directory = self
+            .file_system
+            .join_path(&[&root, &session_directory_name(&cwd)], context)
+            .await
+            .map_err(|e| e.message)?;
+        let _ = self.file_system.create_dir(&directory, true, context).await;
+        let path = self
+            .file_system
+            .join_path(&[&directory, &session_file_name(created_at, &id)], context)
+            .await
+            .map_err(|e| e.message)?;
+        let header = JsonlStorageHeader {
+            v: 4,
+            kind: "header".to_string(),
+            id: id.clone(),
+            storage_version: JSONL_STORAGE_VERSION,
+            created_at,
+            cwd: cwd.clone(),
+            parent_session_id: Some(source.id.clone()),
+            legacy_parent_session_path: None,
+            next_seq: None,
+        };
+        let storage = Arc::new(
+            JsonlStorage::create_from_fork_snapshot(
+                JsonlStorageOptions {
+                    file_system: Arc::clone(&self.file_system),
+                    path: path.clone(),
+                },
+                header,
+                &snapshot,
+                context,
+            )
+            .await?,
+        );
+        let metadata = SessionMetadata {
+            id,
+            created_at,
+            storage_version: JSONL_STORAGE_VERSION,
+            cwd: Some(cwd),
+            parent_session_id: Some(source.id.clone()),
+            legacy_parent_session_path: None,
+        };
+        self.open_sessions
             .lock()
             .unwrap()
-            .get(&source.id)
-            .cloned()
-            .ok_or_else(|| format!("Session not found: {}", source.id))?;
-        let _ = source_storage;
-        let _ = options;
-        let _ = context;
-        Err("JSONL fork is not yet implemented".to_string())
+            .insert(metadata.id.clone(), Arc::clone(&storage));
+        Ok(Arc::new(StorageBackedSession::new(metadata, storage, None)))
     }
 }

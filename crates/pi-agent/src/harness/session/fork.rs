@@ -60,7 +60,7 @@ pub fn create_fork_snapshot(
         .iter()
         .map(|e| (e.base().id.clone(), e.clone()))
         .collect();
-    let source_tips = stored_values_in_namespace(&source.scalar_values, &branch_tip(""));
+    let source_tips = stored_values_in_namespace(&source.scalar_values, &branch_tip("").erased());
     validate_fork_source_snapshot(source, &source_entries, &source_tips, options);
 
     let (entry_ids, destination_tips) =
@@ -82,18 +82,18 @@ pub fn create_fork_snapshot(
     };
 
     for (branch, tip_id) in &destination_tips {
-        let configuration = find_stored_value(&source.scalar_values, &lane_config(branch));
+        let configuration = find_stored_value(&source.scalar_values, &lane_config(branch).erased());
         store(
-            &branch_tip(branch),
+            &branch_tip(branch).erased(),
             serde_json::to_value(tip_id).unwrap_or(Json::Null),
         );
         if let Some(configuration) = configuration {
             store(
-                &lane_config(branch),
+                &lane_config(branch).erased(),
                 serde_json::to_value(configuration.value).unwrap_or(Json::Null),
             );
             store(
-                &lane_state(branch),
+                &lane_state(branch).erased(),
                 serde_json::to_value(LaneState {
                     current_operation_id: None,
                     last_operation_id: None,
@@ -240,9 +240,14 @@ fn validate_fork_source_snapshot(
     }
 
     for tip in source_tips {
-        let configuration =
-            find_stored_value(&source.scalar_values, &lane_config(&tip.address.key));
-        let state = find_stored_value(&source.scalar_values, &lane_state(&tip.address.key));
+        let configuration = find_stored_value(
+            &source.scalar_values,
+            &lane_config(&tip.address.key).erased(),
+        );
+        let state = find_stored_value(
+            &source.scalar_values,
+            &lane_state(&tip.address.key).erased(),
+        );
         if configuration.is_some() != state.is_some() {
             panic!(
                 "Source session branch {:?} has incomplete lane state",

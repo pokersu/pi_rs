@@ -21,7 +21,8 @@ use pi_agent::harness::session::types::{
     CompactionEntry, Entry, EntryBase, EntryType, MessageEntry,
 };
 use pi_agent::harness::tools::{
-    create_bash_tool, create_edit_tool, create_read_tool, create_write_tool,
+    BashToolOptions, ReadToolOptions, create_bash_tool, create_edit_tool, create_read_tool,
+    create_write_tool,
 };
 use pi_agent::harness::{ExecutionEnv, NodeExecutionEnv};
 use pi_agent::{
@@ -56,8 +57,8 @@ async fn main() {
         .unwrap_or_else(|_| ".".to_string());
     let env: Arc<dyn ExecutionEnv> = Arc::new(NodeExecutionEnv::new(cwd));
     let mut tools = vec![
-        create_bash_tool(env.clone()),
-        create_read_tool(env.clone()),
+        create_bash_tool(env.clone(), BashToolOptions::default()),
+        create_read_tool(env.clone(), ReadToolOptions::default()),
         create_write_tool(env.clone()),
         create_edit_tool(env.clone()),
     ];

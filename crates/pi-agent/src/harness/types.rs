@@ -10,7 +10,8 @@ use std::sync::Arc;
 use pi_ai::{CacheRetention, Tool, Transport};
 
 use crate::harness::context::Context;
-use crate::types::AgentToolResult;
+use crate::harness::session::types::ReplayPolicy;
+use crate::types::{AgentToolResult, ToolExecutionMode};
 
 /// 对应 `FileKind`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -380,7 +381,8 @@ pub trait Shell: Send + Sync {
 pub trait ExecutionEnv: FileSystem + Shell {}
 
 /// 对应 `Skill`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Skill {
     pub name: String,
     pub description: String,
@@ -390,7 +392,8 @@ pub struct Skill {
 }
 
 /// 对应 `PromptTemplate`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PromptTemplate {
     pub name: String,
     pub description: Option<String>,
@@ -423,7 +426,20 @@ pub trait AgentHarnessToolInvocation: Send + Sync {
 pub struct AgentHarnessTool {
     pub label: String,
     pub tool: Tool,
+    /// 对应 `prepareArguments?: (args: unknown) => Static<TParameters>`。
+    pub prepare_arguments:
+        Option<Arc<dyn Fn(serde_json::Value) -> serde_json::Value + Send + Sync>>,
+    /// 对应 `replay?: "never" | "safe"`。
+    pub replay: Option<ReplayPolicy>,
+    /// 对应 `executionMode?: ToolExecutionMode`。
+    pub execution_mode: Option<ToolExecutionMode>,
     pub execute: AgentHarnessToolExecuteFn,
+}
+
+impl AgentHarnessTool {
+    pub fn name(&self) -> &str {
+        &self.tool.name
+    }
 }
 
 /// 对应 `AgentHarnessTool.execute` 签名。
@@ -455,6 +471,7 @@ pub struct AgentHarnessStreamOptions {
 }
 
 /// 对应 `AgentHarnessStreamOptionsPatch`。
+/// `headers`/`metadata` 的 patch 语义：内层 `None` 表示删除单个 key。
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentHarnessStreamOptionsPatch {
@@ -462,7 +479,8 @@ pub struct AgentHarnessStreamOptionsPatch {
     pub timeout_ms: Option<u64>,
     pub max_retries: Option<u64>,
     pub max_retry_delay_ms: Option<u64>,
-    pub metadata: Option<serde_json::Value>,
+    pub headers: Option<BTreeMap<String, Option<String>>>,
+    pub metadata: Option<BTreeMap<String, Option<serde_json::Value>>>,
     pub cache_retention: Option<CacheRetention>,
     pub deferred: Option<serde_json::Value>,
 }

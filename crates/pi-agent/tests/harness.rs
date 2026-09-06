@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use pi_agent::harness::tools::{create_bash_tool, create_read_tool, create_write_tool};
+use pi_agent::harness::tools::{
+    BashToolOptions, ReadToolOptions, create_bash_tool, create_read_tool, create_write_tool,
+};
 use pi_agent::harness::{FileSystem, NodeExecutionEnv};
 use pi_ai::TextOrImageContent;
 
@@ -69,7 +71,7 @@ async fn read_tool_reads_text_file() {
     .await
     .unwrap();
 
-    let tool = create_read_tool(env.clone());
+    let tool = create_read_tool(env.clone(), ReadToolOptions::default());
     let result = (tool.execute)(
         "1".into(),
         serde_json::json!({ "path": file.clone() }),
@@ -106,7 +108,7 @@ async fn read_tool_supports_offset() {
     .await
     .unwrap();
 
-    let tool = create_read_tool(env.clone());
+    let tool = create_read_tool(env.clone(), ReadToolOptions::default());
     let result = (tool.execute)(
         "1".into(),
         serde_json::json!({ "path": file.clone(), "offset": 3, "limit": 1 }),
@@ -167,7 +169,7 @@ async fn bash_tool_runs_command() {
     let env = Arc::new(NodeExecutionEnv::new(
         std::env::temp_dir().to_string_lossy().to_string(),
     ));
-    let tool = create_bash_tool(env.clone());
+    let tool = create_bash_tool(env.clone(), BashToolOptions::default());
     let result = (tool.execute)(
         "1".into(),
         serde_json::json!({ "command": "echo hello" }),
@@ -185,7 +187,7 @@ async fn bash_tool_reports_nonzero_exit() {
     let env = Arc::new(NodeExecutionEnv::new(
         std::env::temp_dir().to_string_lossy().to_string(),
     ));
-    let tool = create_bash_tool(env.clone());
+    let tool = create_bash_tool(env.clone(), BashToolOptions::default());
     let result = std::panic::AssertUnwindSafe((tool.execute)(
         "1".into(),
         serde_json::json!({ "command": "exit 3" }),

@@ -26,7 +26,8 @@ use crate::harness::types::{BranchSummaryError, BranchSummaryErrorCode};
 use crate::types::AgentMessage;
 
 /// 对应 `BranchSummaryResult`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BranchSummaryResult {
     pub summary: String,
     pub usage: Option<Usage>,
@@ -280,6 +281,107 @@ pub async fn generate_branch_summary(
         &completion_options,
         options.retry,
         options.callbacks,
+    )
+    .await;
+
+    if response.stop_reason == StopReason::Aborted {
+        return Err(BranchSummaryError::new(
+            BranchSummaryErrorCode::Aborted,
+            response
+                .error_message
+                .unwrap_or_else(|| "Branch summary aborted".to_string()),
+        ));
+    }
+    if response.stop_reason == StopReason::Error {
+        return Err(BranchSummaryError::new(
+            BranchSummaryErrorCode::SummarizationFailed,
+            format!(
+                "Branch summary failed: {}",
+                response
+                    .error_message
+                    .unwrap_or_else(|| "Unknown error".to_string())
+            ),
+        ));
+    }
+
+    let summary_text = content_text(ContentTextInput::Blocks(&response.content), "");
+    let summary = if summary_text.is_empty() {
+        "No summary generated".to_string()
+    } else {
+        format!("{BRANCH_SUMMARY_PREAMBLE}{summary_text}")
+    };
+
+    let (read_files, modified_files) = compute_file_lists(&preparation.file_ops);
+    let summary_with_files = format!(
+        "{summary}{}",
+        format_file_operations(&read_files, &modified_files)
+    );
+
+    Ok(BranchSummaryResult {
+        summary: summary_with_files,
+        usage: Some(response.usage),
+        read_files,
+        modified_files,
+    })
+}
+
+/// 对应 `PreparedBranchSummaryOptions`。
+pub struct PreparedBranchSummaryOptions {
+    pub custom_instructions: Option<String>,
+    pub replace_instructions: bool,
+}
+
+/// 对应 `generateBranchSummaryWithRequest`：通过调用方拥有的单请求边界生成分支摘要。
+pub async fn generate_branch_summary_with_request(
+    preparation: &BranchPreparation,
+    options: &PreparedBranchSummaryOptions,
+    request: &crate::harness::compaction::compaction::SummaryRequest,
+    context: &HarnessContext,
+) -> Result<BranchSummaryResult, BranchSummaryError> {
+    if preparation.messages.is_empty() {
+        return Ok(BranchSummaryResult {
+            summary: "No content to summarize".to_string(),
+            usage: None,
+            read_files: Vec::new(),
+            modified_files: Vec::new(),
+        });
+    }
+
+    let llm_messages = convert_to_llm(preparation.messages.clone());
+    let conversation_text = serialize_conversation(&llm_messages);
+
+    let instructions = if options.replace_instructions {
+        options.custom_instructions.clone().unwrap_or_default()
+    } else if let Some(ci) = &options.custom_instructions {
+        format!("{BRANCH_SUMMARY_PROMPT}\n\nAdditional focus: {ci}")
+    } else {
+        BRANCH_SUMMARY_PROMPT.to_string()
+    };
+
+    let prompt_text =
+        format!("<conversation>\n{conversation_text}\n</conversation>\n\n{instructions}");
+
+    let summarization_messages = vec![Message::User(UserMessage {
+        content: UserContent::Blocks(vec![TextOrImageContent::Text(TextContent {
+            kind: TextKind,
+            text: prompt_text,
+            text_signature: None,
+        })]),
+        timestamp: pi_ai::utils::uuid::now_ms() as u64,
+    })];
+
+    let completion_options = SimpleStreamOptions::default();
+    let response = request(
+        Context {
+            system_prompt: Some(SUMMARIZATION_SYSTEM_PROMPT.to_string()),
+            messages: summarization_messages,
+            tools: None,
+        },
+        crate::harness::compaction::compaction::create_summary_request_options(
+            &completion_options,
+            context,
+        ),
+        context.clone(),
     )
     .await;
 

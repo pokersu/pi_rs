@@ -4,7 +4,7 @@ agent 运行时核心：`Agent` 类 + 双层循环 + 工具执行管线 + 消息
 
 ## 复刻来源
 
-1:1 复刻自 [earendil-works/pi](https://github.com/earendil-works/pi) 的 `packages/agent`，50 个 TS 文件全部对应（Rust 54 文件，多出的 `mod.rs`/`node.rs` 是 Rust 的模块声明与 re-export 惯例）：
+1:1 复刻自 [earendil-works/pi](https://github.com/earendil-works/pi) 的 `packages/agent`，90 个 TS 文件中 89 个已对应（Rust 89 文件，多出的 `mod.rs` 是 Rust 的模块声明与 re-export 惯例；唯一未对应的是 B 类 legacy-v3 迁移等，见根 `todos.md`）：
 
 | 原 TS 目录/文件 | Rust 对应 |
 |---|---|
@@ -49,11 +49,13 @@ agent 运行时核心：`Agent` 类 + 双层循环 + 工具执行管线 + 消息
 2. **`AsyncIterable` → `Vec`**：`SessionSearch.search`、`scanningEntries` 返回 `Vec`（Rust 无内置异步生成器，流式可后续用 `Stream` 补）。
 3. **compaction LLM 调用已补齐**：`complete_simple_with_retries`（有界重试）、`generate_summary`/`generate_summary_with_usage`、`prepare_compaction`、`generate_branch_summary`/`collect_entries_for_branch_summary` 均已实现，走 `models.complete_simple` 调 LLM。
 4. **bash 流式 `onUpdate` 已补**：`Shell.exec` 逐行读取 stdout，经 100ms 节流后通过 `on_update` 回调流式上报。
-5. **read 工具图片**：返回提示而非 base64 attachment（TS 依赖 photon wasm）。
-6. **`jsonl::list` 简化**：元数据目录扫描返回空列表。
-7. **conformance 测试未复刻**：`harness/session/testing/conformance.ts`（1000+ 行 storage 契约测试）未复刻（`create_session_backend_conformance` 返回空列表）；但 `SessionStorage` 已补 `find_entries_on_branch`，`SessionTree` 已补 `find_entry`/`find_entries_on_branch`/`find_entry_on_branch`，`Session` 已补 `view`，`SessionRepo`（InMemory + Jsonl）已补 `fork`。
-8. **`AgentHarness` 操作方法是占位**：与 TS 原版一致（原版也是 `unavailable()` 返回 `HarnessNotImplemented`），仅 getter/setter 真实现。
-9. **TypeBox → JSON 值**：`AgentTool` 参数用 `serde_json::Value`，`prepareArguments` 暂未实现。
+5. **read 工具图片**：已补 —— 基于字节内容检测 mime + 返回 `ImageContent`（base64）；可选 `imageProcessor` 注入（对齐原版 `ReadToolOptions`）。
+6. **`jsonl::list`**：已补 —— 目录扫描枚举所有 session 的 header 元数据。
+7. **conformance 测试未复刻**：`harness/session/testing/conformance/*`（1700+ 行 storage 契约测试）未复刻（`create_session_backend_conformance` 返回空列表）；此为 B 类测试基建，见根 `todos.md`。
+8. **`AgentHarness` 错误的占位 struct 已删除**：早期遗留的 `AgentHarness` struct（含 `prompt`/`steer`/`followUp`/`compact`/`resume` 五个 `unavailable()` 占位方法）不对应原版接口且无引用，已删除；运行时是 `runtime/harness.rs` 的 `Harness` 类 + `runtime/lane.rs` 的 `LaneImpl`。
+9. **TypeBox → JSON 值**：`AgentTool` 参数用 `serde_json::Value`；`prepare_arguments` 回调已支持（execution/tools.rs 中应用）。
+10. **`watch` 快照订阅已对齐**：`HarnessEventBus`/`BufferedEventWatcher` 完整实现（epoch / resnapshot boundary / handler_error 隔离），`AgentLane::watch` 返回 `WatchHandle<LaneSnapshot>`；`run_when_idle` 亦已对齐原版 `AgentLane` 接口。
+11. **`values` 地址强类型化**：`branch_tip`/`lane_config`/`operation_result` 等地址函数返回 `Value<具体类型>`（对齐原版 `values.ts`）；`getValue<T>` 因 Rust `dyn` trait 不支持泛型方法无法复刻，读路径以 `.erased()` 显式擦除类型。
 
 ## 阅读步骤
 

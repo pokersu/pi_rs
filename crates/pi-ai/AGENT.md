@@ -81,6 +81,7 @@
 8. **compat 类型省略**：40+ provider 的兼容性配置（`OpenAICompletionsCompat` 等大量字段）未译，`Model.compat` 用 `serde_json::Value` 占位。
 9. **流式事件回放复用**：网络层是真正的 SSE 流式读取，事件层复用 `faux` 的 `stream_with_deltas`（累积后按事件序列回放）。
 10. **`OAuthCredential` 的 index signature**：TS 用 `[key: string]: unknown` 承载 `scope`/`accountId`/`enterpriseUrl` 等 provider 附加字段，Rust 用 `extra: BTreeMap<String, serde_json::Value>`（`serde(flatten)`）承载。
+11. **deferred 响应能力已对齐**：`Models` 已实现 `stream_deferred`/`fetch_deferred`/`cancel_deferred`，`Provider` trait 带可选 `fetch_deferred`/`cancel_deferred`（默认 `None`/错误，与原版 `Api.fetchDeferred?` 一致）；openai/deepseek 与原版一样不实现 deferred（responses 的 `in_progress` 视为 `stop`），仅 faux 提供完整 deferred 回放。
 
 ## 阅读步骤
 

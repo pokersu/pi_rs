@@ -8,6 +8,10 @@ pub mod context;
 pub mod env;
 pub mod events;
 pub mod execution;
+#[path = "harness-event.rs"]
+pub mod harness_event;
+#[path = "hooks.rs"]
+pub mod hooks;
 pub mod messages;
 #[path = "prompt-templates.rs"]
 pub mod prompt_templates;

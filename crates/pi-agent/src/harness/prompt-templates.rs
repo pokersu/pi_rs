@@ -181,41 +181,78 @@ pub fn parse_command_args(args_string: &str) -> Vec<String> {
 
 /// 对应 `substituteArgs`
 pub fn substitute_args(content: &str, args: &[String]) -> String {
-    let mut result = content.to_string();
-
-    // ${@:N} 和 ${@:N:L}
-    // 简化：处理 $ARGUMENTS 和 $@ 与 $N
-    result = result.replace("$ARGUMENTS", &args.join(" "));
-    result = result.replace("$@", &args.join(" "));
-
-    // $N（占位符）
-    let mut substituted = String::new();
-    let mut chars = result.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '$'
-            && let Some(&next) = chars.peek()
-            && next.is_ascii_digit()
+    let all_args = args.join(" ");
+    let mut result = String::new();
+    let mut i = 0;
+    while i < content.len() {
+        let rest = &content[i..];
+        // ${@:N} 或 ${@:N:L}
+        if rest.starts_with("${@:")
+            && let Some(close) = rest.find('}')
+        {
+            let inner = &rest[4..close];
+            let mut parts = inner.split(':');
+            let start = parts
+                .next()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(1)
+                .saturating_sub(1);
+            let len = parts.next().and_then(|s| s.parse::<usize>().ok());
+            let slice: Vec<&str> = match len {
+                Some(l) => args
+                    .iter()
+                    .skip(start)
+                    .take(l)
+                    .map(|s| s.as_str())
+                    .collect(),
+                None => args.iter().skip(start).map(|s| s.as_str()).collect(),
+            };
+            result.push_str(&slice.join(" "));
+            i += close + 1;
+            continue;
+        }
+        // $ARGUMENTS
+        if rest.starts_with("$ARGUMENTS") {
+            result.push_str(&all_args);
+            i += "$ARGUMENTS".len();
+            continue;
+        }
+        // $@
+        if rest.starts_with("$@") {
+            result.push_str(&all_args);
+            i += 2;
+            continue;
+        }
+        // $N（占位符）
+        if rest.starts_with('$')
+            && let Some(first) = rest[1..].chars().next()
+            && first.is_ascii_digit()
         {
             let mut num = String::new();
-            while let Some(&d) = chars.peek() {
-                if d.is_ascii_digit() {
-                    num.push(d);
-                    chars.next();
+            let mut j = i + 1;
+            for ch in content[j..].chars() {
+                if ch.is_ascii_digit() {
+                    num.push(ch);
+                    j += ch.len_utf8();
                 } else {
                     break;
                 }
             }
             let index: usize = num.parse().unwrap_or(1);
-            substituted.push_str(
+            result.push_str(
                 args.get(index.saturating_sub(1))
                     .map(|s| s.as_str())
                     .unwrap_or(""),
             );
+            i = j;
             continue;
         }
-        substituted.push(c);
+        // 普通字符（按 UTF-8 边界推进）
+        let ch = rest.chars().next().unwrap();
+        result.push(ch);
+        i += ch.len_utf8();
     }
-    substituted
+    result
 }
 
 /// 对应 `formatPromptTemplateInvocation`

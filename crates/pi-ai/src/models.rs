@@ -19,8 +19,9 @@ use crate::auth::types::{
     ProviderAuthInteraction,
 };
 use crate::types::{
-    AbortSignal, AssistantMessageEvent, Context, ErrorStopReason, Model, ModelThinkingLevel,
-    ProviderHeaders, SimpleStreamOptions, StreamFunction, Usage, UsageCost,
+    AbortSignal, AssistantMessageEvent, Context, DeferredCancelOptions, DeferredFetchOptions,
+    DeferredHandle, ErrorStopReason, Model, ModelThinkingLevel, ProviderHeaders,
+    SimpleStreamOptions, StreamFunction, Usage, UsageCost,
 };
 use crate::utils::abort::{BoxError, operation_signal, race_with_abort_signal};
 use crate::utils::error_stream::{create_error_message, stream_error};
@@ -50,6 +51,28 @@ pub trait Provider: Send + Sync {
         context: &Context,
         options: Option<&SimpleStreamOptions>,
     ) -> AssistantMessageEventStream;
+
+    /// 对应 `fetchDeferred(model, handle, options)`（可选能力）。
+    /// 默认返回 `None` 表示该 provider 不支持 deferred responses。
+    fn fetch_deferred(
+        &self,
+        _model: &Model,
+        _handle: &DeferredHandle,
+        _options: Option<&DeferredFetchOptions>,
+    ) -> Option<AssistantMessageEventStream> {
+        None
+    }
+
+    /// 对应 `cancelDeferred(model, handle, options)`（可选能力）。
+    /// 默认返回错误表示该 provider 不支持 deferred responses。
+    fn cancel_deferred(
+        &self,
+        _model: &Model,
+        _handle: &DeferredHandle,
+        _options: Option<&DeferredCancelOptions>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
+        Box::pin(async { Err("Provider does not support deferred responses".to_string()) })
+    }
 }
 
 /// 对应 `CreateProviderOptions`（去掉 filterModels/fetchModels）。
@@ -126,6 +149,16 @@ pub struct Models {
 impl Default for Models {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Clone for Models {
+    fn clone(&self) -> Self {
+        Self {
+            providers: Mutex::new(self.providers.lock().unwrap().clone()),
+            credentials: self.credentials.clone(),
+            auth_context: self.auth_context.clone(),
+        }
     }
 }
 
@@ -284,6 +317,178 @@ impl Models {
     ) -> Pin<Box<dyn Future<Output = crate::types::AssistantMessage> + Send>> {
         let stream = self.stream_simple(&model, &context, options.as_ref());
         Box::pin(async move { stream.result().await })
+    }
+
+    /// 对应 `streamDeferred(model, handle, options)`
+    pub fn stream_deferred(
+        &self,
+        model: &Model,
+        handle: &DeferredHandle,
+        options: Option<&DeferredFetchOptions>,
+    ) -> AssistantMessageEventStream {
+        let Some(provider) = self.get_provider(&model.provider) else {
+            return stream_error(model, format!("Unknown provider: {}", model.provider));
+        };
+
+        let credentials = self.credentials.clone();
+        let auth_context = self.auth_context.clone();
+        let provider_id = provider.id().to_string();
+        let provider_auth = provider.auth().clone();
+        let model = model.clone();
+        let handle = handle.clone();
+        let options = options.cloned();
+
+        let stream = create_assistant_message_event_stream();
+        let producer = stream.clone();
+
+        tokio::spawn(async move {
+            let overrides = AuthResolutionOverrides {
+                api_key: options.as_ref().and_then(|o| o.request.api_key.clone()),
+                env: None,
+                min_oauth_validity_ms: None,
+                signal: options.as_ref().and_then(|o| o.request.signal.clone()),
+            };
+            let provider_ref = ProviderAuthRef {
+                id: &provider_id,
+                auth: &provider_auth,
+            };
+            match resolve_provider_auth(
+                &provider_ref,
+                credentials.as_ref(),
+                auth_context.as_ref(),
+                Some(&overrides),
+            )
+            .await
+            {
+                Ok(Some(resolution)) => {
+                    let mut request_model = model.clone();
+                    if let Some(base_url) = resolution.auth.base_url.as_ref() {
+                        request_model.base_url = base_url.clone();
+                    }
+                    let mut request_options = options.clone();
+                    if let Some(opts) = request_options.as_mut() {
+                        opts.request.api_key = resolution.auth.api_key.clone();
+                        opts.request.headers = merge_headers(
+                            opts.request.headers.clone(),
+                            resolution.auth.headers.clone(),
+                        );
+                    }
+                    match provider.fetch_deferred(&request_model, &handle, request_options.as_ref())
+                    {
+                        Some(mut inner) => {
+                            while let Some(event) = inner.next().await {
+                                producer.push(event);
+                            }
+                        }
+                        None => {
+                            let error = create_error_message(
+                                &format!(
+                                    "Provider {provider_id} does not support deferred responses"
+                                ),
+                                &model.api,
+                                &model.provider,
+                                &model.id,
+                            );
+                            producer.push(AssistantMessageEvent::Error {
+                                reason: ErrorStopReason::Error,
+                                error: error.clone(),
+                            });
+                            producer.end(Some(error));
+                        }
+                    }
+                }
+                Ok(None) => {
+                    let error = create_error_message(
+                        &format!("Provider is not configured: {provider_id}"),
+                        &model.api,
+                        &model.provider,
+                        &model.id,
+                    );
+                    producer.push(AssistantMessageEvent::Error {
+                        reason: ErrorStopReason::Error,
+                        error: error.clone(),
+                    });
+                    producer.end(Some(error));
+                }
+                Err(err) => {
+                    let error = create_error_message(
+                        &err.to_string(),
+                        &model.api,
+                        &model.provider,
+                        &model.id,
+                    );
+                    producer.push(AssistantMessageEvent::Error {
+                        reason: ErrorStopReason::Error,
+                        error: error.clone(),
+                    });
+                    producer.end(Some(error));
+                }
+            }
+        });
+
+        stream
+    }
+
+    /// 对应 `fetchDeferred(model, handle, options)`
+    pub fn fetch_deferred(
+        &self,
+        model: &Model,
+        handle: &DeferredHandle,
+        options: Option<&DeferredFetchOptions>,
+    ) -> Pin<Box<dyn Future<Output = crate::types::AssistantMessage> + Send>> {
+        let stream = self.stream_deferred(model, handle, options);
+        Box::pin(async move { stream.result().await })
+    }
+
+    /// 对应 `cancelDeferred(model, handle, options)`
+    pub async fn cancel_deferred(
+        &self,
+        model: &Model,
+        handle: &DeferredHandle,
+        options: Option<&DeferredCancelOptions>,
+    ) -> Result<(), String> {
+        let Some(provider) = self.get_provider(&model.provider) else {
+            return Err(format!("Unknown provider: {}", model.provider));
+        };
+        let credentials = self.credentials.clone();
+        let auth_context = self.auth_context.clone();
+        let provider_id = provider.id().to_string();
+        let provider_auth = provider.auth().clone();
+        let mut model = model.clone();
+        let handle = handle.clone();
+        let mut options = options.cloned();
+
+        let overrides = AuthResolutionOverrides {
+            api_key: options.as_ref().and_then(|o| o.api_key.clone()),
+            env: None,
+            min_oauth_validity_ms: None,
+            signal: options.as_ref().and_then(|o| o.signal.clone()),
+        };
+        let provider_ref = ProviderAuthRef {
+            id: &provider_id,
+            auth: &provider_auth,
+        };
+        let resolution = resolve_provider_auth(
+            &provider_ref,
+            credentials.as_ref(),
+            auth_context.as_ref(),
+            Some(&overrides),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        let Some(resolution) = resolution else {
+            return Err(format!("Provider is not configured: {provider_id}"));
+        };
+        if let Some(base_url) = resolution.auth.base_url.as_ref() {
+            model.base_url = base_url.clone();
+        }
+        if let Some(opts) = options.as_mut() {
+            opts.api_key = resolution.auth.api_key.clone();
+            opts.headers = merge_headers(opts.headers.clone(), resolution.auth.headers.clone());
+        }
+        provider
+            .cancel_deferred(&model, &handle, options.as_ref())
+            .await
     }
 
     /// 对应 `checkAuth(providerId, options?)`：检查 provider 是否已配置认证

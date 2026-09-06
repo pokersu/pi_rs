@@ -14,7 +14,8 @@ use crate::types::{AbortSignal, AssistantMessage, StopReason};
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 /// 对应 `RetryPolicy`：有界尝试 + 指数退避（`baseDelayMs * 2^(attempt-1)`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RetryPolicy {
     pub enabled: bool,
     /// 最大重试次数（0 = 不重试）。首次调用不计入重试。

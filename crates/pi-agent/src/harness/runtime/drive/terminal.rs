@@ -21,16 +21,19 @@ pub async fn operation_cleanup_writes(
     context: &Context,
 ) -> Result<Vec<Write>, String> {
     let tool_arguments = reader
-        .scan_values(&operation_tool_args_prefix(operation_id), context)
+        .scan_values(&operation_tool_args_prefix(operation_id, None), context)
         .await?;
     let tool_memos = reader
-        .scan_values(&operation_tool_memo_prefix(operation_id), context)
+        .scan_values(&operation_tool_memo_prefix(operation_id, None), context)
         .await?;
     let preparations = reader
-        .scan_values(&operation_preparation_prefix(operation_id), context)
+        .scan_values(
+            &operation_preparation_prefix(operation_id).erased(),
+            context,
+        )
         .await?;
     let tool_outputs = reader
-        .scan_values(&pending_tool_output_prefix(operation_id), context)
+        .scan_values(&pending_tool_output_prefix(operation_id).erased(), context)
         .await?;
 
     let mut pending_ids = HashSet::new();

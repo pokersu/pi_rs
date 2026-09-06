@@ -84,6 +84,11 @@ pub struct PreparedCommit {
     pub timestamp: u64,
 }
 
+/// 对应 `materializeCommittedEntry`：把 NewEntry 物化为带 seq/timestamp 的 Entry。
+pub fn materialize_committed_entry(entry: &NewEntry, seq: u64, timestamp: u64) -> Entry {
+    entry.clone().materialize(seq, timestamp)
+}
+
 /// 对应 `insertEntry`。
 pub fn insert_entry(entry: NewEntry) -> Write {
     Write::Entry(crate::harness::session::types::EntryWrite {

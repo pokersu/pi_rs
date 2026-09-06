@@ -1,5 +1,8 @@
 //! Rust 翻译自 packages/agent/src/harness/tools/bash.ts（含流式 onUpdate + 100ms 节流）
 
+use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,8 +21,28 @@ const DEFAULT_MAX_BYTES: usize = 50 * 1024;
 /// 对应 `BASH_UPDATE_THROTTLE_MS`
 const BASH_UPDATE_THROTTLE_MS: u64 = 100;
 
+/// 对应 `BashExecution`。
+pub struct BashExecution {
+    pub command: String,
+    pub cwd: String,
+    pub env: BTreeMap<String, String>,
+    pub inherit_env: bool,
+}
+
+/// 对应 `BashPrepare`。
+pub type BashPrepare = Arc<
+    dyn Fn(&mut BashExecution, &Context) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync,
+>;
+
+/// 对应 `BashToolOptions`。
+#[derive(Default, Clone)]
+pub struct BashToolOptions {
+    pub command_prefix: Option<String>,
+    pub prepare: Option<BashPrepare>,
+}
+
 /// 对应 `createBashTool`
-pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
+pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>, options: BashToolOptions) -> AgentTool {
     AgentTool {
         label: "bash".to_string(),
         tool: pi_ai::Tool {
@@ -40,6 +63,7 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
         },
         execute: Arc::new(move |_id, params, signal, on_update| {
             let env = env.clone();
+            let options = options.clone();
             Box::pin(async move {
                 let command = params
                     .get("command")
@@ -97,11 +121,31 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
                     })
                 };
 
+                let mut execution = BashExecution {
+                    command: options
+                        .command_prefix
+                        .as_ref()
+                        .map(|prefix| format!("{prefix}\n{command}"))
+                        .unwrap_or(command),
+                    cwd: env.cwd().to_string(),
+                    env: BTreeMap::new(),
+                    inherit_env: true,
+                };
+                if let Some(prepare) = &options.prepare {
+                    prepare(&mut execution, &context).await;
+                }
+
                 let result = get_or_throw(
                     env.exec(
-                        &command,
+                        &execution.command,
                         ShellExecOptions {
-                            cwd: Some(env.cwd().to_string()),
+                            cwd: Some(execution.cwd.clone()),
+                            env: if execution.env.is_empty() {
+                                None
+                            } else {
+                                Some(execution.env.clone())
+                            },
+                            inherit_env: execution.inherit_env,
                             timeout,
                             capture: Some(ShellOutputCaptureOptions {
                                 limits: ShellOutputLimits {
@@ -112,7 +156,6 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
                                 spill: Some(true),
                             }),
                             on_update: Some(on_update_cb),
-                            ..Default::default()
                         },
                         &context,
                     )
