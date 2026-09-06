@@ -251,6 +251,98 @@ pub trait FileSystem: Send + Sync {
     async fn cleanup(&self);
 }
 
+/// 对应 `ShellOutputRetention`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShellOutputRetention {
+    Head,
+    Tail,
+}
+
+/// 对应 `ShellOutputLimits`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellOutputLimits {
+    pub max_bytes: usize,
+    pub max_lines: usize,
+    pub retain: Option<ShellOutputRetention>,
+}
+
+/// 对应 `ShellOutputCaptureOptions`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellOutputCaptureOptions {
+    pub limits: ShellOutputLimits,
+    pub spill: Option<bool>,
+}
+
+/// 对应 `ShellOutputTruncation = Omit<TruncationResult, "content">`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellOutputTruncation {
+    pub truncated: bool,
+    pub truncated_by: Option<String>,
+    pub total_lines: usize,
+    pub total_bytes: usize,
+    pub output_lines: usize,
+    pub output_bytes: usize,
+    pub last_line_partial: bool,
+    pub first_line_exceeds_limit: bool,
+    pub max_lines: usize,
+    pub max_bytes: usize,
+}
+
+/// 对应 `ShellOutputMetadata`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellOutputMetadata {
+    pub truncation: ShellOutputTruncation,
+    pub spill_path: Option<String>,
+    pub last_line_bytes: Option<usize>,
+}
+
+/// 对应 `ShellOutputView`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellOutputView {
+    pub text: String,
+    pub truncation: ShellOutputTruncation,
+    pub spill_path: Option<String>,
+    pub last_line_bytes: Option<usize>,
+}
+
+/// 对应 `ShellOutputUpdate`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum ShellOutputUpdate {
+    Replace {
+        output: ShellOutputView,
+    },
+    Append {
+        text: String,
+        metadata: ShellOutputMetadata,
+    },
+    Slide {
+        #[serde(rename = "drop")]
+        drop: usize,
+        text: String,
+        metadata: ShellOutputMetadata,
+    },
+    Metadata {
+        metadata: ShellOutputMetadata,
+    },
+}
+
+/// 对应 `ShellExecResult`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellExecResult {
+    pub truncation: ShellOutputTruncation,
+    pub spill_path: Option<String>,
+    pub last_line_bytes: Option<usize>,
+    pub exit_code: i32,
+}
+
 /// 对应 `ShellExecOptions`
 #[derive(Default)]
 pub struct ShellExecOptions {
