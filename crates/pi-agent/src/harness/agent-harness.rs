@@ -489,3 +489,167 @@ impl AgentHarness {
 // 保留未使用类型引用，避免告警。
 #[allow(unused)]
 fn _unused(_: ImageContent, _: SimpleStreamOptions, _: Usage) {}
+
+// ---------------------------------------------------------------------------
+// R1 接口类型（runtime 驱动依赖，后续逐步对齐原版完整定义）。
+// ---------------------------------------------------------------------------
+
+use serde_json::Value as Json;
+
+use crate::harness::session::types::OperationResultRecord;
+use crate::harness::types::{PromptTemplate, Skill};
+
+/// 对应 `ModelIdentity`。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelIdentity {
+    pub provider: String,
+    pub model_id: String,
+}
+
+/// 对应 `DriveOptions`。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DriveOptions {
+    pub operation_id: String,
+    pub wait_for_retry: bool,
+    pub poll_deferred: bool,
+}
+
+/// 对应 `DriveOutcome`。
+#[derive(Debug, Clone, PartialEq)]
+pub enum DriveOutcome {
+    Settled {
+        outcome: OperationResultRecord,
+    },
+    WaitingRetry {
+        operation_id: String,
+        not_before: u64,
+    },
+    WaitingDeferred {
+        operation_id: String,
+        deferred: DeferredHandle,
+    },
+}
+
+/// 对应 `DriveResult`。
+pub type DriveResult = Result<DriveOutcome, HarnessError>;
+
+/// 对应 `OperationStatus`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationStatus {
+    Running,
+    Open,
+    Aborting,
+}
+
+/// 对应 `CurrentOperationInfo`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurrentOperationInfo {
+    pub id: String,
+    pub kind: String,
+    pub started_at: u64,
+    pub status: OperationStatus,
+    pub captured_model: Option<ModelIdentity>,
+}
+
+/// 对应 `OpenOperation`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenOperation {
+    pub lane: String,
+    pub operation_id: String,
+    pub kind: String,
+    pub started_at: u64,
+    pub aborting: Option<bool>,
+}
+
+/// 对应 `OperationRequest`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OperationRequest {
+    Prompt {
+        operation_id: Option<String>,
+        prompt: Json,
+        images: Option<Vec<ImageContent>>,
+    },
+    Skill {
+        operation_id: Option<String>,
+        name: String,
+        additional_instructions: Option<String>,
+    },
+    PromptTemplate {
+        operation_id: Option<String>,
+        name: String,
+        args: Option<Vec<String>>,
+    },
+    Compaction {
+        operation_id: Option<String>,
+        custom_instructions: Option<String>,
+    },
+    Navigation {
+        operation_id: Option<String>,
+        target_id: Option<String>,
+        summarize: bool,
+        label: Option<String>,
+        custom_instructions: Option<String>,
+    },
+}
+
+/// 对应 `OperationAdmission`。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationAdmission {
+    pub operation_id: String,
+    pub kind: String,
+    pub started_at: u64,
+}
+
+/// 对应 `Resources`。
+#[derive(Debug, Clone, Default)]
+pub struct Resources {
+    pub skills: Vec<Skill>,
+    pub prompt_templates: Vec<PromptTemplate>,
+}
+
+/// 对应 `HarnessEvent`（简化：结构化 JSON）。
+pub type HarnessEvent = Json;
+
+/// 对应 `AgentLane`（runtime 提供实现）。
+#[async_trait::async_trait]
+pub trait AgentLane: Send + Sync {
+    fn name(&self) -> &str;
+    async fn accept(
+        &self,
+        request: OperationRequest,
+        context: &crate::harness::context::Context,
+    ) -> Result<OperationAdmission, HarnessError>;
+    async fn drive(
+        &self,
+        options: DriveOptions,
+        context: &crate::harness::context::Context,
+    ) -> DriveResult;
+    async fn request_abort(
+        &self,
+        operation_id: String,
+        context: &crate::harness::context::Context,
+    ) -> Result<Json, HarnessError>;
+}
+
+/// 对应 `AgentHarness`（runtime 提供实现）。
+#[async_trait::async_trait]
+pub trait AgentHarnessApi: Send + Sync {
+    async fn lane(
+        &self,
+        name: &str,
+        context: &crate::harness::context::Context,
+    ) -> Result<Option<Arc<dyn AgentLane>>, HarnessError>;
+    async fn lanes(
+        &self,
+        context: &crate::harness::context::Context,
+    ) -> Result<Vec<OpenOperation>, HarnessError>;
+    async fn close(&self, context: &crate::harness::context::Context) -> Result<(), HarnessError>;
+}
+
+use std::sync::Arc;
