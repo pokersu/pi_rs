@@ -32,10 +32,7 @@ pub trait TaggedError: std::error::Error {
 pub type ErrorMatchers<'a, T, E> = std::collections::BTreeMap<&'a str, Box<dyn Fn(&E) -> T + 'a>>;
 
 /// 对应 `matchError(error, matchers)`：按 `tag` 分派到匹配器；无匹配返回 `None`。
-pub fn match_error<T, E: TaggedError>(
-    error: &E,
-    matchers: &ErrorMatchers<'_, T, E>,
-) -> Option<T> {
+pub fn match_error<T, E: TaggedError>(error: &E, matchers: &ErrorMatchers<'_, T, E>) -> Option<T> {
     matchers.get(error.tag()).map(|matcher| matcher(error))
 }
 

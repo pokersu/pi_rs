@@ -330,6 +330,7 @@ fn partial_message(model: &Model) -> AssistantMessage {
         model: model.id.clone(),
         response_model: None,
         response_id: None,
+        provider_thinking_level: None,
         usage: pi_ai::utils::error_stream::default_usage(),
         stop_reason: StopReason::Pending,
         deferred: None,

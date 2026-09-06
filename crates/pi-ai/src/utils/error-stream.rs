@@ -50,6 +50,7 @@ pub fn create_error_message(
         model: model_id.to_string(),
         response_model: None,
         response_id: None,
+        provider_thinking_level: None,
         usage: default_usage(),
         stop_reason: StopReason::Error,
         deferred: None,

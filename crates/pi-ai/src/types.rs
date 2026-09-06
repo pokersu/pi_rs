@@ -407,6 +407,9 @@ pub struct AssistantMessage {
     pub model: String,
     pub response_model: Option<String>,
     pub response_id: Option<String>,
+    /// 对应 `providerThinkingLevel`：provider 实际使用的 effort level（legacy 或 unmanaged 响应为 None）。
+    #[serde(default)]
+    pub provider_thinking_level: Option<String>,
     pub usage: Usage,
     pub stop_reason: StopReason,
     pub deferred: Option<DeferredHandle>,

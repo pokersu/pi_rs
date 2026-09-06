@@ -30,6 +30,7 @@ struct Compat {
     supports_additional_tools: bool,
     supports_tool_search: bool,
     supports_explicit_prompt_cache_mode: bool,
+    supports_max_output_tokens: bool,
 }
 
 /// 对应 `getCompat`。
@@ -54,6 +55,7 @@ fn get_compat(model: &Model) -> Compat {
         supports_additional_tools: get_bool("supportsAdditionalTools", false),
         supports_tool_search: get_bool("supportsToolSearch", false),
         supports_explicit_prompt_cache_mode: get_bool("supportsExplicitPromptCacheMode", false),
+        supports_max_output_tokens: get_bool("supportsMaxOutputTokens", true),
     }
 }
 
@@ -85,11 +87,31 @@ fn get_prompt_cache_retention(
     compat: &Compat,
     cache_retention: CacheRetention,
 ) -> Option<&'static str> {
-    if cache_retention == CacheRetention::Long && compat.supports_long_cache_retention {
+    if cache_retention == CacheRetention::Long
+        && compat.supports_long_cache_retention
+        && !compat.supports_explicit_prompt_cache_mode
+    {
         Some("24h")
     } else {
         None
     }
+}
+
+/// 对应 `getPromptCacheOptions`。
+fn get_prompt_cache_options(
+    compat: &Compat,
+    cache_retention: CacheRetention,
+) -> Option<serde_json::Value> {
+    if !compat.supports_explicit_prompt_cache_mode {
+        return None;
+    }
+    if cache_retention == CacheRetention::None {
+        return Some(json!({ "mode": "explicit" }));
+    }
+    if cache_retention == CacheRetention::Long && compat.supports_long_cache_retention {
+        return Some(json!({ "ttl": "30m" }));
+    }
+    None
 }
 
 /// 对应 `clampOpenAIPromptCacheKey`（截断到 64 字符）。
@@ -598,8 +620,10 @@ fn build_body(model: &Model, context: &Context, options: Option<&SimpleStreamOpt
             context,
             options.stream.max_tokens.unwrap_or(model.max_tokens),
         );
-        body["max_output_tokens"] =
-            json!(clamped_max_tokens.max(OPENAI_RESPONSES_MIN_OUTPUT_TOKENS));
+        if compat.supports_max_output_tokens {
+            body["max_output_tokens"] =
+                json!(clamped_max_tokens.max(OPENAI_RESPONSES_MIN_OUTPUT_TOKENS));
+        }
         if let Some(temperature) = options.stream.temperature {
             body["temperature"] = json!(temperature);
         }
@@ -612,8 +636,8 @@ fn build_body(model: &Model, context: &Context, options: Option<&SimpleStreamOpt
         if let Some(retention) = get_prompt_cache_retention(&compat, cache_retention) {
             body["prompt_cache_retention"] = json!(retention);
         }
-        if cache_retention == CacheRetention::None && compat.supports_explicit_prompt_cache_mode {
-            body["prompt_cache_options"] = json!({ "mode": "explicit" });
+        if let Some(prompt_cache_options) = get_prompt_cache_options(&compat, cache_retention) {
+            body["prompt_cache_options"] = json!(prompt_cache_options);
         }
 
         // service tier（经 sampling_params 传入）。
@@ -668,6 +692,7 @@ impl StreamState {
                 model: model.id.clone(),
                 response_model: None,
                 response_id: None,
+                provider_thinking_level: None,
                 usage: default_usage(),
                 stop_reason: StopReason::Pending,
                 deferred: None,
@@ -1412,6 +1437,7 @@ mod tests {
             model: "deepseek-chat".into(),
             response_model: None,
             response_id: None,
+            provider_thinking_level: None,
             usage: default_usage(),
             stop_reason: StopReason::ToolUse,
             deferred: None,

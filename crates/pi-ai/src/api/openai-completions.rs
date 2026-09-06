@@ -292,6 +292,7 @@ async fn stream_request(
         model: model.id.clone(),
         response_model: None,
         response_id: None,
+        provider_thinking_level: None,
         usage,
         stop_reason,
         deferred: None,

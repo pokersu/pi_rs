@@ -640,6 +640,7 @@ fn failure_message(aborted: bool, message: String) -> AgentMessage {
         model: "unknown".to_string(),
         response_model: None,
         response_id: None,
+        provider_thinking_level: None,
         usage: default_usage(),
         stop_reason: if aborted {
             StopReason::Aborted

@@ -240,6 +240,7 @@ async fn stream_without_start_event_keeps_context_intact() {
                     model: model.id.clone(),
                     response_model: None,
                     response_id: None,
+                    provider_thinking_level: None,
                     usage: default_usage(),
                     stop_reason: if is_first {
                         StopReason::ToolUse

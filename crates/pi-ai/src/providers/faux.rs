@@ -69,6 +69,7 @@ pub fn faux_assistant_message(
         model: DEFAULT_MODEL_ID.to_string(),
         response_model: None,
         response_id: None,
+        provider_thinking_level: None,
         usage: default_usage(),
         stop_reason,
         deferred: None,
