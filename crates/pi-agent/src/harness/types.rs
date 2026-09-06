@@ -3,8 +3,14 @@
 //! harness 的抽象：`FileSystem`/`Shell`/`ExecutionEnv` 能力接口、错误类型、`Skill`/`PromptTemplate`。
 
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
-use pi_ai::AbortSignal;
+use pi_ai::{AbortSignal, Tool};
+
+use crate::harness::context::Context;
+use crate::types::AgentToolResult;
 
 /// 对应 `FileKind`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -428,3 +434,45 @@ pub struct PromptTemplate {
     pub description: Option<String>,
     pub content: String,
 }
+
+/// 对应 `AgentHarnessToolUpdateOptions`
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AgentHarnessToolUpdateOptions {
+    pub checkpoint: bool,
+}
+
+/// 对应 `AgentHarnessToolUpdateCallback<TDetails>`：onUpdate 必选，带 checkpoint options。
+pub type AgentHarnessToolUpdateCallback =
+    Box<dyn Fn(AgentToolResult, Option<AgentHarnessToolUpdateOptions>) + Send>;
+
+/// 对应 `AgentHarnessToolInvocation`。
+#[async_trait::async_trait]
+pub trait AgentHarnessToolInvocation: Send + Sync {
+    fn invocation_id(&self) -> &str;
+    fn operation_id(&self) -> &str;
+    fn turn_id(&self) -> &str;
+    async fn get_memo(&self, name: &str) -> Option<serde_json::Value>;
+    async fn set_memo(&self, name: &str, value: Option<serde_json::Value>);
+}
+
+/// 对应 `AgentHarnessTool<TContext, TParameters, TDetails>`（R1）。
+/// Rust 中 `toolContext` 由闭包捕获（保持内置工具 `env` 闭包模式），`TDetails` 用 JSON 值。
+#[derive(Clone)]
+pub struct AgentHarnessTool {
+    pub label: String,
+    pub tool: Tool,
+    pub execute: AgentHarnessToolExecuteFn,
+}
+
+/// 对应 `AgentHarnessTool.execute` 签名。
+pub type AgentHarnessToolExecuteFn = Arc<
+    dyn Fn(
+            String,
+            serde_json::Value,
+            AgentHarnessToolUpdateCallback,
+            Arc<dyn AgentHarnessToolInvocation>,
+            Context,
+        ) -> Pin<Box<dyn Future<Output = AgentToolResult> + Send>>
+        + Send
+        + Sync,
+>;
