@@ -40,11 +40,50 @@ pub struct Harness {
     pub models: Arc<Models>,
     pub hooks: Arc<HookRegistry>,
     pub events: Arc<HarnessEventBus>,
-    lanes: Mutex<BTreeMap<String, Arc<LaneImpl>>>,
+    lanes: Arc<Mutex<BTreeMap<String, Arc<LaneImpl>>>>,
     seed: LaneConfiguration,
     config: Arc<Mutex<Config>>,
-    closed_error: Mutex<Option<String>>,
+    closed_error: Arc<Mutex<Option<String>>>,
     fault_error: Arc<Mutex<Option<String>>>,
+}
+
+/// 执行 harness fault 的全部副作用并返回 fault 错误文本（对应上游 `fault()`）。
+///
+/// 幂等：已 fault 或已 close 时直接返回既有错误。顺序对齐上游：
+/// 缓存 faultError → seal 所有 lane → hooks.close → emit fault 事件 → events.close。
+fn apply_fault(
+    fault_error: &Mutex<Option<String>>,
+    closed_error: &Mutex<Option<String>>,
+    lanes: &Mutex<BTreeMap<String, Arc<LaneImpl>>>,
+    hooks: &HookRegistry,
+    events: &HarnessEventBus,
+    cause: String,
+    context: &Context,
+) -> String {
+    if let Some(error) = &*fault_error.lock().unwrap() {
+        return error.clone();
+    }
+    if let Some(error) = &*closed_error.lock().unwrap() {
+        return error.clone();
+    }
+    let fault = format!("AgentHarness storage or invariant fault: {cause}");
+    *fault_error.lock().unwrap() = Some(fault.clone());
+    for lane in lanes.lock().unwrap().values() {
+        lane.seal(fault.clone());
+    }
+    hooks.close(fault.clone());
+    // emit 的同步部分（recipients 绑定）必须在 events.close 之前执行；
+    // 交付在 spawn 的任务中完成（对齐上游 `void this.events.emit(...)`）。
+    let delivery = events.emit(
+        crate::harness::harness_event::HarnessEvent::Fault {
+            code: "harness_fault".to_string(),
+            message: fault.clone(),
+        },
+        context.clone(),
+    );
+    tokio::spawn(delivery);
+    events.close(fault.clone());
+    fault
 }
 
 impl Harness {
@@ -58,21 +97,17 @@ impl Harness {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    #[allow(clippy::needless_pass_by_value)]
     fn fault(&self, cause: String, context: &Context) -> HarnessError {
-        if let Some(error) = &*self.fault_error.lock().unwrap() {
-            return HarnessError::Closed(Closed::new(error.clone()));
-        }
-        if let Some(error) = &*self.closed_error.lock().unwrap() {
-            return HarnessError::Closed(Closed::new(error.clone()));
-        }
-        let fault = format!("AgentHarness storage or invariant fault: {cause}");
-        *self.fault_error.lock().unwrap() = Some(fault.clone());
-        for lane in self.lanes.lock().unwrap().values() {
-            lane.seal(fault.clone());
-        }
-        self.hooks.close(fault.clone());
-        let _ = context;
+        let fault = apply_fault(
+            &self.fault_error,
+            &self.closed_error,
+            &self.lanes,
+            &self.hooks,
+            &self.events,
+            cause,
+            context,
+        );
         HarnessError::Closed(Closed::new(fault))
     }
 
@@ -83,13 +118,21 @@ impl Harness {
         let events_for_emit = Arc::clone(&self.events);
         let events_for_watch = Arc::clone(&self.events);
         let config = Arc::clone(&self.config);
-        let fault_lane = Arc::clone(&self.fault_error);
-        let on_fault: FaultHandler = Arc::new(move |cause, _context| {
-            fault_lane
-                .lock()
-                .unwrap()
-                .clone()
-                .unwrap_or_else(|| format!("AgentHarness storage or invariant fault: {cause}"))
+        let lanes_for_fault = Arc::clone(&self.lanes);
+        let hooks_for_fault = Arc::clone(&self.hooks);
+        let events_for_fault = Arc::clone(&self.events);
+        let fault_error_for = Arc::clone(&self.fault_error);
+        let closed_error_for = Arc::clone(&self.closed_error);
+        let on_fault: FaultHandler = Arc::new(move |cause, context| {
+            apply_fault(
+                &fault_error_for,
+                &closed_error_for,
+                &lanes_for_fault,
+                &hooks_for_fault,
+                &events_for_fault,
+                cause,
+                &context,
+            )
         });
         let emit_batch: EmitBatch = Arc::new(move |batch, context| {
             let bus = Arc::clone(&events_for_emit);
@@ -129,7 +172,7 @@ impl Harness {
         self.session
             .set_name(name.clone(), context)
             .await
-            .map_err(|e| HarnessError::Closed(Closed::new(e)))?;
+            .map_err(|e| self.fault(e, context))?;
         self.events
             .emit(
                 crate::harness::harness_event::HarnessEvent::ValueUpdate {
@@ -165,7 +208,7 @@ impl Harness {
         self.session
             .set_label(target_id, label.clone(), context)
             .await
-            .map_err(|e| HarnessError::Closed(Closed::new(e)))?;
+            .map_err(|e| self.fault(e, context))?;
         self.events
             .emit(
                 crate::harness::harness_event::HarnessEvent::ValueUpdate {
@@ -439,12 +482,12 @@ impl Harness {
         }
         let stored = read_lane_storage(self.session.as_ref(), name, context)
             .await
-            .map_err(|e| HarnessError::Closed(Closed::new(e)))?;
+            .map_err(|e| self.fault(e, context))?;
         let lane = match &stored {
             ClassifiedLaneStorage::Lane { .. } => {
                 let state = restore_lane_state(self.session.as_ref(), name, &stored, context)
                     .await
-                    .map_err(|e| HarnessError::Closed(Closed::new(e)))?;
+                    .map_err(|e| self.fault(e, context))?;
                 self.build_lane(name.to_string(), state)
             }
             ClassifiedLaneStorage::Branch { tip } => {
@@ -475,10 +518,10 @@ impl Harness {
                 self.session
                     .begin_mutation(context)
                     .await
-                    .map_err(|e| HarnessError::Closed(Closed::new(e)))?
+                    .map_err(|e| self.fault(e, context))?
                     .commit(writes, context)
                     .await
-                    .map_err(|e| HarnessError::Closed(Closed::new(e)))?;
+                    .map_err(|e| self.fault(e, context))?;
                 self.build_lane(name.to_string(), state)
             }
             ClassifiedLaneStorage::Absent => {
@@ -488,7 +531,7 @@ impl Harness {
                         .session
                         .get_entries(std::slice::from_ref(tip_id), context)
                         .await
-                        .map_err(|e| HarnessError::Closed(Closed::new(e)))?;
+                        .map_err(|e| self.fault(e, context))?;
                     if !found.contains_key(tip_id) {
                         return Err(HarnessError::UnknownTarget(
                             crate::harness::agent_harness::UnknownTarget::new(
@@ -528,10 +571,10 @@ impl Harness {
                 self.session
                     .begin_mutation(context)
                     .await
-                    .map_err(|e| HarnessError::Closed(Closed::new(e)))?
+                    .map_err(|e| self.fault(e, context))?
                     .commit(writes, context)
                     .await
-                    .map_err(|e| HarnessError::Closed(Closed::new(e)))?;
+                    .map_err(|e| self.fault(e, context))?;
                 self.build_lane(name.to_string(), state)
             }
         };
@@ -605,6 +648,7 @@ impl AgentHarnessApi for Harness {
             let _ = lane.seal(error.clone());
         }
         self.hooks.close(error.clone());
+        self.events.close(error.clone());
         self.session
             .close(context)
             .await
@@ -776,10 +820,10 @@ pub async fn create_agent_harness(
         models: options.models,
         hooks,
         events,
-        lanes: Mutex::new(BTreeMap::new()),
+        lanes: Arc::new(Mutex::new(BTreeMap::new())),
         seed,
         config: Arc::new(Mutex::new(options.config)),
-        closed_error: Mutex::new(None),
+        closed_error: Arc::new(Mutex::new(None)),
         fault_error: Arc::new(Mutex::new(None)),
     });
 
