@@ -42,15 +42,20 @@ pub struct BoundaryPlacement {
 
 /// 对应 `normalizedRetryPolicy`。
 pub fn normalized_retry_policy(retry: &pi_ai::utils::retry::RetryPolicy) -> NormalizedRetryPolicy {
+    let max_agent_delay_ms = retry
+        .max_agent_delay_ms
+        .unwrap_or(pi_ai::utils::retry::DEFAULT_MAX_AGENT_RETRY_DELAY_MS);
     if retry.enabled {
         NormalizedRetryPolicy {
             max_attempts: retry.max_retries as u32 + 1,
             base_delay_ms: retry.base_delay_ms,
+            max_agent_delay_ms,
         }
     } else {
         NormalizedRetryPolicy {
             max_attempts: 1,
             base_delay_ms: retry.base_delay_ms,
+            max_agent_delay_ms,
         }
     }
 }

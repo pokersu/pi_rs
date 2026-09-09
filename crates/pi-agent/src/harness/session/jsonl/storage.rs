@@ -10,9 +10,6 @@ use tokio::sync::Mutex;
 
 use crate::harness::context::Context;
 use crate::harness::session::commit::CommittedWrite;
-use crate::harness::session::fork::{
-    ForkDestinationSnapshot, ForkSourceSnapshot, fork_snapshot_writes,
-};
 use crate::harness::session::in_memory_storage_state::InMemoryStorageState;
 use crate::harness::session::jsonl::codec::parse_jsonl_session_header;
 use crate::harness::session::jsonl::types::{JSONL_STORAGE_VERSION, JsonlStorageHeader};
@@ -207,44 +204,11 @@ impl JsonlStorage {
         Ok(())
     }
 
-    /// 对应 `captureForkSource`。
-    pub fn capture_fork_source(&self) -> Result<ForkSourceSnapshot, String> {
-        let inner = self.inner.blocking_lock();
+    /// 对应 `captureForkNextSeq`：捕获 fork 序列边界高水位。
+    pub async fn capture_fork_next_seq(&self) -> Result<u64, String> {
+        let inner = self.inner.lock().await;
         self.assert_open(&inner)?;
-        let (entries, scalar_values) = inner.storage_state.snapshot_entries_and_values();
-        Ok(ForkSourceSnapshot {
-            entries,
-            scalar_values,
-            entries_complete: Some(true),
-        })
-    }
-
-    /// 对应 `createFromForkSnapshot`。
-    pub async fn create_from_fork_snapshot(
-        options: JsonlStorageOptions,
-        header: JsonlStorageHeader,
-        snapshot: &ForkDestinationSnapshot,
-        context: &Context,
-    ) -> Result<Self, String> {
-        let writes = fork_snapshot_writes(snapshot);
-        let snapshot_header = JsonlStorageHeader {
-            next_seq: Some(snapshot.next_seq),
-            ..header
-        };
-        let transactions: Vec<Vec<CommittedWrite>> =
-            writes.into_iter().map(|write| vec![write]).collect();
-        let content = serialize_storage(&snapshot_header, &transactions);
-        options
-            .file_system
-            .write_file(&options.path, content.as_bytes(), context)
-            .await
-            .map_err(|e| {
-                format!(
-                    "Failed to write JSONL storage {}: {}",
-                    options.path, e.message
-                )
-            })?;
-        JsonlStorage::open(options, context).await
+        Ok(inner.storage_state.get_next_seq())
     }
 }
 

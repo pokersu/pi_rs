@@ -2,16 +2,16 @@
 //!
 //! 基于 `std::fs` + `std::process` 的 `FileSystem`/`Shell` 实现。
 
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use pi_ai::AbortSignal;
 
 use crate::harness::context::Context;
 use crate::harness::types::{
     ExecutionEnv, ExecutionError, ExecutionErrorCode, FileError, FileErrorCode, FileInfo, FileKind,
-    FileSystem, Shell, ShellExecOptions, ShellExecResult,
+    FileSystem, Shell, ShellExecOptions, ShellExecResult, TextLine, TextLineReader,
 };
 use crate::harness::utils::output_capture::OutputCapture;
 
@@ -78,6 +78,51 @@ impl NodeExecutionEnv {
     }
 }
 
+/// 对应 `NodeTextLineReader`。
+struct NodeTextLineReader {
+    inner: Mutex<NodeTextLineReaderInner>,
+}
+
+struct NodeTextLineReaderInner {
+    reader: BufReader<std::fs::File>,
+    path: String,
+    closed: bool,
+}
+
+#[async_trait::async_trait]
+impl TextLineReader for NodeTextLineReader {
+    async fn read_line(&self, context: &Context) -> Result<Option<TextLine>, FileError> {
+        check_aborted(context.abort_signal())?;
+        let mut inner = self.inner.lock().unwrap();
+        if inner.closed {
+            return Err(FileError::new(
+                FileErrorCode::Invalid,
+                "Text line reader is closed",
+            ));
+        }
+        let mut buf: Vec<u8> = Vec::new();
+        let n = inner
+            .reader
+            .read_until(b'\n', &mut buf)
+            .map_err(|e| map_io_error(&inner.path, &e))?;
+        if n == 0 {
+            return Ok(None);
+        }
+        let terminated = buf.last() == Some(&b'\n');
+        if terminated {
+            buf.pop();
+        }
+        let text = String::from_utf8_lossy(&buf).to_string();
+        Ok(Some(TextLine { text, terminated }))
+    }
+
+    async fn close(&self, _context: &Context) -> Result<(), FileError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.closed = true;
+        Ok(())
+    }
+}
+
 #[async_trait::async_trait]
 impl FileSystem for NodeExecutionEnv {
     fn cwd(&self) -> &str {
@@ -109,6 +154,22 @@ impl FileSystem for NodeExecutionEnv {
     async fn read_text_file(&self, path: &str, context: &Context) -> Result<String, FileError> {
         check_aborted(context.abort_signal())?;
         std::fs::read_to_string(path).map_err(|e| map_io_error(path, &e))
+    }
+
+    async fn open_text_line_reader(
+        &self,
+        path: &str,
+        context: &Context,
+    ) -> Result<Arc<dyn TextLineReader>, FileError> {
+        check_aborted(context.abort_signal())?;
+        let file = std::fs::File::open(path).map_err(|e| map_io_error(path, &e))?;
+        Ok(Arc::new(NodeTextLineReader {
+            inner: Mutex::new(NodeTextLineReaderInner {
+                reader: BufReader::new(file),
+                path: path.to_string(),
+                closed: false,
+            }),
+        }))
     }
 
     async fn read_text_lines(

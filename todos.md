@@ -12,7 +12,7 @@ harness runtime 核心已 100% 复刻：
 - **lane**：command/settle/continue + accept/drive/request_abort + **31 个 agent 方法**（含 `watch`/`run_when_idle`）+ idle 管理。
 - **事件系统**：强类型 29 种 `HarnessEvent` + 完整 `HarnessEventBus`/`BufferedEventWatcher`（`watch` 快照订阅，含 epoch/resnapshot boundary）。
 - **reducer / restore / harness**（`Harness` 类 + `create_agent_harness`）。
-- **session 存储**：memory / jsonl 主路径（含 `fork`、`list` 目录扫描、`capture_fork_source`/`create_from_fork_snapshot`）。
+- **session 存储**：memory / jsonl 主路径（含 `storage.fork`（内存 `create_fork`）、jsonl 两阶段流式 `run_jsonl_fork`、`list` 目录扫描、`capture_fork_next_seq`）。
 - **compaction**（含 branch-summarization 的 LLM 生成）、hooks、execution、skills、prompt-templates。
 - **telemetry**：schema 数据已补（`AI_TELEMETRY_SCHEMA` + `HARNESS_TELEMETRY_SCHEMA`，12 个 span）。
 - **工具**：全部 10 个工具已复刻 —— bash（流式 `onUpdate` + `commandPrefix`/`prepare`）、read（图片 + `imageProcessor`）、edit-diff（NFKC 归一化）等。

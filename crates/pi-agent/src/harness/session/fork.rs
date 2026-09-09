@@ -5,8 +5,10 @@ use std::collections::{HashMap, HashSet};
 use serde_json::Value as Json;
 
 use crate::harness::session::commit::CommittedWrite;
-use crate::harness::session::fork_policy::{ForkScope, classify_fork_address};
-use crate::harness::session::types::{Entry, ForkOptions, ForkPosition, LaneState};
+use crate::harness::session::fork_policy::{
+    ForkCurrentStatePlan, project_fork_current_state_write, select_branch_fork,
+};
+use crate::harness::session::types::{Entry, ForkOptions};
 use crate::harness::session::values::{
     StoredValue, Value, branch_tip, lane_config, lane_state, value,
 };
@@ -63,8 +65,7 @@ pub fn create_fork_snapshot(
     let source_tips = stored_values_in_namespace(&source.scalar_values, &branch_tip("").erased());
     validate_fork_source_snapshot(source, &source_entries, &source_tips, options);
 
-    let (entry_ids, destination_tips) =
-        select_fork_contents(&source_entries, &source_tips, options);
+    let (entry_ids, plan) = select_fork_contents(&source_entries, &source_tips, options);
     let mut entries = HashMap::new();
     for id in &entry_ids {
         entries.insert(id.clone(), source_entries.get(id).unwrap().clone());
@@ -72,54 +73,30 @@ pub fn create_fork_snapshot(
 
     let mut scalar_values: Vec<StoredValue<Json>> = Vec::new();
     let mut next_seq = entries.values().map(|e| e.base().seq).max().unwrap_or(0) + 1;
-    let mut store = |address: &Value<Json>, stored_value: Json| {
-        scalar_values.push(StoredValue {
-            address: value(&address.namespace, &address.key),
-            value: stored_value,
-            seq: next_seq,
-        });
-        next_seq += 1;
-    };
-
-    for (branch, tip_id) in &destination_tips {
-        let configuration = find_stored_value(&source.scalar_values, &lane_config(branch).erased());
-        store(
-            &branch_tip(branch).erased(),
-            serde_json::to_value(tip_id).unwrap_or(Json::Null),
-        );
-        if let Some(configuration) = configuration {
-            store(
-                &lane_config(branch).erased(),
-                serde_json::to_value(configuration.value).unwrap_or(Json::Null),
-            );
-            store(
-                &lane_state(branch).erased(),
-                serde_json::to_value(LaneState {
-                    current_operation_id: None,
-                    last_operation_id: None,
-                    inbox: Vec::new(),
-                })
-                .unwrap_or(Json::Null),
-            );
-        }
-    }
-
     for stored in &source.scalar_values {
-        let scope = match options {
-            ForkOptions::Tree { .. } => ForkScope::Tree,
-            ForkOptions::Branch { .. } => ForkScope::Branch,
-        };
-        match classify_fork_address(
-            &stored.address.namespace,
-            &stored.address.key,
-            scope,
+        let projected = project_fork_current_state_write(
+            &CommittedWrite::ValueSet {
+                seq: stored.seq,
+                namespace: stored.address.namespace.clone(),
+                key: stored.address.key.clone(),
+                value: stored.value.clone(),
+            },
+            &plan,
             |entry_id| entry_ids.contains(entry_id),
-        ) {
-            crate::harness::session::fork_policy::ForkDisposition::Copy => {
-                store(&stored.address, stored.value.clone());
-            }
-            crate::harness::session::fork_policy::ForkDisposition::Exclude
-            | crate::harness::session::fork_policy::ForkDisposition::Reconstruct => {}
+        );
+        if let Some(CommittedWrite::ValueSet {
+            namespace,
+            key,
+            value: projected_value,
+            ..
+        }) = projected
+        {
+            scalar_values.push(StoredValue {
+                address: value(&namespace, &key),
+                value: projected_value,
+                seq: next_seq,
+            });
+            next_seq += 1;
         }
     }
 
@@ -154,20 +131,14 @@ fn select_fork_contents(
     source_entries: &HashMap<String, Entry>,
     source_tips: &[StoredValue<Json>],
     options: &ForkOptions,
-) -> (HashSet<String>, HashMap<String, Option<String>>) {
+) -> (HashSet<String>, ForkCurrentStatePlan) {
     let mut entry_ids = HashSet::new();
-    let mut destination_tips: HashMap<String, Option<String>> = HashMap::new();
-
     match options {
         ForkOptions::Tree { .. } => {
             for id in source_entries.keys() {
                 entry_ids.insert(id.clone());
             }
-            for stored in source_tips {
-                let tip: Option<String> =
-                    serde_json::from_value(stored.value.clone()).unwrap_or(None);
-                destination_tips.insert(stored.address.key.clone(), tip);
-            }
+            (entry_ids, ForkCurrentStatePlan::Tree)
         }
         ForkOptions::Branch {
             branch,
@@ -175,46 +146,29 @@ fn select_fork_contents(
             position,
             ..
         } => {
-            let source_tip = source_tips
+            let tip = source_tips
                 .iter()
                 .find(|stored| stored.address.key == *branch)
-                .ok_or_else(|| format!("Unknown source branch: {branch}"))
-                .unwrap();
-            let source_tip_value: Option<String> =
-                serde_json::from_value(source_tip.value.clone()).unwrap_or(None);
-            let requested = entry_id.clone().or(source_tip_value.clone());
-            let mut found = requested.is_none();
-            let mut tip_id: Option<String> = None;
-            let mut current = source_tip_value;
-            while let Some(entry_id) = current {
-                let entry = source_entries
-                    .get(&entry_id)
-                    .ok_or_else(|| format!("Corrupt source branch: missing parent {entry_id}"))
-                    .unwrap();
-                if Some(entry.base().id.clone()) == requested {
-                    found = true;
-                    let position_before = position == &Some(ForkPosition::Before);
-                    tip_id = if position_before {
-                        entry.base().parent_id.clone()
-                    } else {
-                        Some(entry.base().id.clone())
-                    };
-                    if !position_before {
-                        entry_ids.insert(entry.base().id.clone());
-                    }
-                } else if found {
-                    entry_ids.insert(entry.base().id.clone());
-                }
-                current = entry.base().parent_id.clone();
-            }
-            if !found {
-                panic!("Fork entry {requested:?} is not on source branch {branch:?}");
-            }
-            destination_tips.insert(branch.clone(), tip_id);
+                .map(|stored| {
+                    serde_json::from_value::<Option<String>>(stored.value.clone()).unwrap_or(None)
+                });
+            let plan = select_branch_fork(
+                branch,
+                tip,
+                entry_id.clone(),
+                *position,
+                |entry_id| {
+                    source_entries
+                        .get(entry_id)
+                        .map(|e| e.base().parent_id.clone())
+                },
+                |entry_id| {
+                    entry_ids.insert(entry_id.to_string());
+                },
+            );
+            (entry_ids, plan)
         }
     }
-
-    (entry_ids, destination_tips)
 }
 
 fn validate_fork_source_snapshot(

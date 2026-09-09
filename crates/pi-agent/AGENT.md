@@ -56,6 +56,7 @@ agent 运行时核心：`Agent` 类 + 双层循环 + 工具执行管线 + 消息
 9. **TypeBox → JSON 值**：`AgentTool` 参数用 `serde_json::Value`；`prepare_arguments` 回调已支持（execution/tools.rs 中应用）。
 10. **`watch` 快照订阅已对齐**：`HarnessEventBus`/`BufferedEventWatcher` 完整实现（epoch / resnapshot boundary / handler_error 隔离），`AgentLane::watch` 返回 `WatchHandle<LaneSnapshot>`；`run_when_idle` 亦已对齐原版 `AgentLane` 接口。
 11. **`values` 地址强类型化**：`branch_tip`/`lane_config`/`operation_result` 等地址函数返回 `Value<具体类型>`（对齐原版 `values.ts`）；`getValue<T>` 因 Rust `dyn` trait 不支持泛型方法无法复刻，读路径以 `.erased()` 显式擦除类型。
+12. **fork 重构（对齐上游 2026-09 fork 系列 commit）**：`fork-policy.rs` 由旧 `ForkScope`/`ForkDisposition`/`classify_fork_address` 改为 `ForkCurrentStatePlan`（Branch{ branch, destination_tip }/Tree）+ `select_branch_fork`/`project_fork_current_state_write`；内存后端 `create_fork`（InMemoryStorageState.select_fork_plan）与 JSONL 后端两阶段流式 `run_jsonl_fork`（新增 `jsonl/fork.rs` + `jsonl/io.rs`，先索引后投影，`publish_jsonl` 原子发布）均对齐原版；`legacy-v3` 迁移未复刻（fork 开放/关闭 v3 源与 `JsonlStorage.open` v3 分支均显式返回 Err）。retry 侧同步 `RetryPolicy.max_agent_delay_ms` 上限（`retry_delay_ms` 指数退避 cap）。
 
 ## 阅读步骤
 

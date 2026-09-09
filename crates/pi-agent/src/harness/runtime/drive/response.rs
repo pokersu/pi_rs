@@ -546,17 +546,13 @@ pub async fn publish_response<L: Lane + 'static>(
                             });
                         }
                     } else if response.stop_reason == StopReason::Error {
-                        let (attempt, max_attempts, base_delay) = match &current {
+                        let (attempt, max_attempts) = match &current {
                             OperationState::AssistantEffectPending {
                                 attempt,
                                 generation_context,
                                 ..
-                            } => (
-                                *attempt,
-                                generation_context.retry_policy.max_attempts,
-                                generation_context.retry_policy.base_delay_ms,
-                            ),
-                            _ => (0, 1, 0),
+                            } => (*attempt, generation_context.retry_policy.max_attempts),
+                            _ => (0, 1),
                         };
                         if matches!(current, OperationState::AssistantEffectPending { .. })
                             && (recovery || is_retryable_assistant_error(&response))
@@ -568,15 +564,16 @@ pub async fn publish_response<L: Lane + 'static>(
                                 } => generation_context.clone(),
                                 _ => unreachable!(),
                             };
+                            let not_before = retry_not_before(
+                                &generation_context.retry_policy,
+                                attempt,
+                                pi_ai::utils::uuid::now_ms() as u64,
+                            );
                             settled = Some(OperationState::AssistantRetryWait {
                                 scope: scope.clone(),
                                 generation_context,
                                 next_attempt: attempt + 1,
-                                not_before: retry_not_before(
-                                    base_delay,
-                                    attempt,
-                                    pi_ai::utils::uuid::now_ms() as u64,
-                                ),
+                                not_before,
                                 error_message: response
                                     .error_message
                                     .clone()

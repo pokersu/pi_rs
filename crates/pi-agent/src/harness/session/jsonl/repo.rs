@@ -4,15 +4,17 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::harness::context::Context;
-use crate::harness::session::fork::create_fork_snapshot;
 use crate::harness::session::jsonl::codec::{JsonlParsedSessionHeader, parse_jsonl_session_header};
+use crate::harness::session::jsonl::fork::{
+    JsonlForkInput, JsonlForkSourceMetadata, run_jsonl_fork,
+};
 use crate::harness::session::jsonl::storage::{JsonlStorage, JsonlStorageOptions};
 use crate::harness::session::jsonl::types::{
     JSONL_STORAGE_VERSION, JsonlSessionCreateOptions, JsonlSessionMetadata, JsonlStorageHeader,
 };
 use crate::harness::session::session::StorageBackedSession;
 use crate::harness::session::types::{
-    ForkOptions, Session, SessionCreateOptions, SessionMetadata, SessionRepo, Storage,
+    ForkOptions, Session, SessionCreateOptions, SessionMetadata, SessionRepo,
 };
 use crate::harness::types::{FileKind, FileSystem};
 
@@ -324,44 +326,63 @@ impl SessionRepo for JsonlSessionRepo {
         if *self.closed.lock().unwrap() {
             return Err("JsonlSessionRepo is closed".to_string());
         }
-        let source_storage = self.open_sessions.lock().unwrap().get(&source.id).cloned();
-        let source_snapshot = match source_storage {
-            Some(storage) => storage.capture_fork_source()?,
-            None => {
-                let path = source
-                    .cwd
-                    .clone()
-                    .map(|cwd| {
-                        let root = self.sessions_root_input.clone();
-                        let directory = session_directory_name(&cwd);
-                        format!(
-                            "{root}/{directory}/{}",
-                            session_file_name(source.created_at, &source.id)
-                        )
-                    })
-                    .ok_or_else(|| "Session metadata missing cwd".to_string())?;
-                let storage = Arc::new(
-                    JsonlStorage::open(
-                        JsonlStorageOptions {
-                            file_system: Arc::clone(&self.file_system),
-                            path,
-                        },
-                        context,
-                    )
-                    .await?,
-                );
-                let snapshot = storage.capture_fork_source()?;
-                let _ = storage.close(context).await;
-                snapshot
-            }
-        };
-        let snapshot = create_fork_snapshot(&source_snapshot, &options);
         let id = match &options {
             ForkOptions::Branch { id, .. } | ForkOptions::Tree { id } => id.clone(),
         }
         .unwrap_or_else(pi_ai::uuidv7);
         let cwd = source.cwd.clone().unwrap_or_else(|| ".".to_string());
         let created_at = pi_ai::utils::uuid::now_ms() as u64;
+        let source_storage = self.open_sessions.lock().unwrap().get(&source.id).cloned();
+
+        let source_root = self.root(context).await?;
+        let source_directory = self
+            .file_system
+            .join_path(&[&source_root, &session_directory_name(&cwd)], context)
+            .await
+            .map_err(|e| e.message)?;
+        let source_path = self
+            .file_system
+            .join_path(
+                &[
+                    &source_directory,
+                    &session_file_name(source.created_at, &source.id),
+                ],
+                context,
+            )
+            .await
+            .map_err(|e| e.message)?;
+        let metadata = JsonlForkSourceMetadata {
+            id: source.id.clone(),
+            cwd: cwd.clone(),
+            path: source_path,
+        };
+
+        let input = match source_storage {
+            Some(storage) => {
+                let next_seq = storage.capture_fork_next_seq().await?;
+                JsonlForkInput::Open { metadata, next_seq }
+            }
+            None => {
+                let lines = self
+                    .file_system
+                    .read_text_lines(&metadata.path, Some(1), context)
+                    .await
+                    .map_err(|e| e.message)?;
+                if let Some(first) = lines.first()
+                    && matches!(
+                        parse_jsonl_session_header(first),
+                        Ok(JsonlParsedSessionHeader::V3Legacy { .. })
+                    )
+                {
+                    return Err(
+                        "Cannot fork a legacy v3 JSONL session; legacy v3 migration is not implemented"
+                            .to_string(),
+                    );
+                }
+                JsonlForkInput::Closed { metadata }
+            }
+        };
+
         let root = self.root(context).await?;
         let directory = self
             .file_system
@@ -385,14 +406,22 @@ impl SessionRepo for JsonlSessionRepo {
             legacy_parent_session_path: None,
             next_seq: None,
         };
+        run_jsonl_fork(
+            input,
+            self.file_system.as_ref(),
+            &path,
+            header,
+            &options,
+            context,
+        )
+        .await?;
+
         let storage = Arc::new(
-            JsonlStorage::create_from_fork_snapshot(
+            JsonlStorage::open(
                 JsonlStorageOptions {
                     file_system: Arc::clone(&self.file_system),
                     path: path.clone(),
                 },
-                header,
-                &snapshot,
                 context,
             )
             .await?,

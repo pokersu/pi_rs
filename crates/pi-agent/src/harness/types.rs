@@ -167,6 +167,22 @@ pub struct FileInfo {
     pub mtime_ms: u64,
 }
 
+/// 对应 `TextLine`：从文本文件读取的一行 UTF-8。
+#[derive(Debug, Clone)]
+pub struct TextLine {
+    pub text: String,
+    /// 该行是否以 `\n` 结尾；调用者用它丢弃撕裂的最后一条记录。
+    pub terminated: bool,
+}
+
+/// 对应 `TextLineReader`：保留末行终止态的 pull-based UTF-8 行读取器。
+#[async_trait::async_trait]
+pub trait TextLineReader: Send + Sync {
+    async fn read_line(&self, context: &Context) -> Result<Option<TextLine>, FileError>;
+    /// 释放打开的文件。必须 best-effort，不得抛错。
+    async fn close(&self, context: &Context) -> Result<(), FileError>;
+}
+
 /// 对应 `FileSystem`。所有方法不抛错，失败编码进返回的 `Result`。
 #[async_trait::async_trait]
 pub trait FileSystem: Send + Sync {
@@ -174,6 +190,12 @@ pub trait FileSystem: Send + Sync {
     async fn absolute_path(&self, path: &str, context: &Context) -> Result<String, FileError>;
     async fn join_path(&self, parts: &[&str], context: &Context) -> Result<String, FileError>;
     async fn read_text_file(&self, path: &str, context: &Context) -> Result<String, FileError>;
+    /// 打开一个 UTF-8 文本文件用于 pull-based 行读取。
+    async fn open_text_line_reader(
+        &self,
+        path: &str,
+        context: &Context,
+    ) -> Result<std::sync::Arc<dyn TextLineReader>, FileError>;
     async fn read_text_lines(
         &self,
         path: &str,

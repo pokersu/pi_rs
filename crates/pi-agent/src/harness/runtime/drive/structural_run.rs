@@ -559,26 +559,18 @@ fn retry_wait_from_effect(effect: &OperationState, error_message: &str) -> Opera
         } => (scope.clone(), task.clone(), summary_context.clone(), *attempt),
         _ => unreachable!(),
     };
+    let not_before = retry_not_before(
+        &summary_context.retry_policy,
+        attempt,
+        pi_ai::utils::uuid::now_ms() as u64,
+    );
     OperationState::SummaryRetryWait {
         scope,
         task,
         summary_context,
         next_attempt: attempt + 1,
-        not_before: retry_not_before(
-            summary_context_for(effect).retry_policy.base_delay_ms,
-            attempt,
-            pi_ai::utils::uuid::now_ms() as u64,
-        ),
+        not_before,
         error_message: error_message.to_string(),
-    }
-}
-
-fn summary_context_for(effect: &OperationState) -> SummaryContext {
-    match effect {
-        OperationState::SummaryEffectPending { summary_context, .. } => summary_context.clone(),
-        OperationState::SummaryReady { summary_context, .. } => summary_context.clone(),
-        OperationState::SummaryRetryWait { summary_context, .. } => summary_context.clone(),
-        _ => unreachable!(),
     }
 }
 

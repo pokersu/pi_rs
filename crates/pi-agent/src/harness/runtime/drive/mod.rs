@@ -23,7 +23,7 @@ pub mod terminal;
 pub mod tool_placement;
 pub mod tools;
 
-pub use retry::{retry_delay, retry_not_before, wait_until};
+pub use retry::{retry_not_before, wait_until};
 pub use terminal::{operation_cleanup_writes, operation_result_record};
 
 /// 对应 `currentOperation`：读取并校验当前 operation 属于本 drive。

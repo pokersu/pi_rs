@@ -419,6 +419,7 @@ pub struct InboxItem {
 pub struct NormalizedRetryPolicy {
     pub max_attempts: u32,
     pub base_delay_ms: u64,
+    pub max_agent_delay_ms: u64,
 }
 
 /// 对应 `GenerationContext`。

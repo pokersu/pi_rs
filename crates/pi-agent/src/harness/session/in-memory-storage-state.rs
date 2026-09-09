@@ -2,25 +2,44 @@
 //!
 //! 完整物化 session 状态，供 MemoryStorage 与 JsonlStorage 使用。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value as Json;
 
 use crate::harness::session::commit::{
     CommittedWrite, PreparedCommit, prepare_storage_commit, validate_committed_writes,
 };
+use crate::harness::session::fork_policy::{
+    ForkCurrentStatePlan, project_fork_current_state_write, select_branch_fork,
+};
 use crate::harness::session::types::{
-    Entry, EntryScan, EntryStructure, ScanOrder, SessionStats, StorageBranchScan, UsageRow,
-    UsageScan, Write,
+    Entry, EntryScan, EntryStructure, ForkOptions, ScanOrder, SessionStats, StorageBranchScan,
+    UsageRow, UsageScan, Write,
 };
 use crate::harness::session::values::{
-    ListElement, ListOrder, ListReadOptions, StoredValue, Value, ValueList,
-    resolve_list_read_options, value,
+    ListElement, ListOrder, ListReadOptions, StoredValue, Value, ValueList, branch_tip,
+    lane_config, lane_state, list, resolve_list_read_options, value,
 };
 use crate::harness::utils::usage::{add_usage, empty_usage};
 
 struct StoredListSnapshot {
+    address: ValueList<Json>,
     elements: Vec<ListElement<Json>>,
+}
+
+/// 对应 `MemoryForkPlan`。
+struct MemoryForkPlan {
+    plan: ForkCurrentStatePlan,
+    entry_ids: HashSet<String>,
+}
+
+impl MemoryForkPlan {
+    fn is_entry_copied(&self, entry_id: &str) -> bool {
+        match &self.plan {
+            ForkCurrentStatePlan::Tree => true,
+            ForkCurrentStatePlan::Branch { .. } => self.entry_ids.contains(entry_id),
+        }
+    }
 }
 
 fn physical_key(namespace: &str, key: &str) -> String {
@@ -130,6 +149,7 @@ impl InMemoryStorageState {
                             self.list_values.insert(
                                 pkey,
                                 StoredListSnapshot {
+                                    address: list(namespace, key),
                                     elements: vec![element],
                                 },
                             );
@@ -151,6 +171,149 @@ impl InMemoryStorageState {
             "Invalid storage sequence high-water mark: {next_seq}"
         );
         self.next_seq = self.next_seq.max(next_seq);
+    }
+
+    /// 对应 `createFork`：从 live state 直接构造 destination state。
+    pub fn create_fork(&self, options: &ForkOptions) -> InMemoryStorageState {
+        let plan = self.select_fork_plan(options);
+
+        let mut destination = InMemoryStorageState::new();
+        let mut message_count = 0;
+        for entry in &self.entries_by_seq {
+            if !plan.is_entry_copied(&entry.base().id) {
+                continue;
+            }
+            destination
+                .entries
+                .insert(entry.base().id.clone(), entry.clone());
+            destination.entries_by_seq.push(entry.clone());
+            if matches!(entry, Entry::Message(_)) {
+                message_count += 1;
+            }
+        }
+        destination.stats.message_count = message_count;
+
+        for stored in self.scalar_values.values() {
+            let projected = project_fork_current_state_write(
+                &CommittedWrite::ValueSet {
+                    seq: stored.seq,
+                    namespace: stored.address.namespace.clone(),
+                    key: stored.address.key.clone(),
+                    value: stored.value.clone(),
+                },
+                &plan.plan,
+                |entry_id| plan.is_entry_copied(entry_id),
+            );
+            if let Some(projected) = projected {
+                destination.apply_value_set_or_list_append(&projected);
+            }
+        }
+
+        for stored in self.list_values.values() {
+            for element in &stored.elements {
+                let projected = project_fork_current_state_write(
+                    &CommittedWrite::ListAppend {
+                        seq: element.seq,
+                        namespace: stored.address.namespace.clone(),
+                        key: stored.address.key.clone(),
+                        value: element.value.clone(),
+                    },
+                    &plan.plan,
+                    |entry_id| plan.is_entry_copied(entry_id),
+                );
+                if let Some(projected) = projected {
+                    destination.apply_value_set_or_list_append(&projected);
+                }
+            }
+        }
+        destination.next_seq = self.next_seq;
+        destination
+    }
+
+    fn select_fork_plan(&self, options: &ForkOptions) -> MemoryForkPlan {
+        match options {
+            ForkOptions::Tree { .. } => MemoryForkPlan {
+                plan: ForkCurrentStatePlan::Tree,
+                entry_ids: HashSet::new(),
+            },
+            ForkOptions::Branch {
+                branch,
+                entry_id,
+                position,
+                ..
+            } => {
+                let tip = self.get_value(&branch_tip(branch).erased()).map(|stored| {
+                    serde_json::from_value::<Option<String>>(stored.value.clone()).unwrap_or(None)
+                });
+                let mut entry_ids = HashSet::new();
+                let plan = select_branch_fork(
+                    branch,
+                    tip,
+                    entry_id.clone(),
+                    *position,
+                    |entry_id| {
+                        self.entries
+                            .get(entry_id)
+                            .map(|e| e.base().parent_id.clone())
+                    },
+                    |entry_id| {
+                        entry_ids.insert(entry_id.to_string());
+                    },
+                );
+                if self.get_value(&lane_config(branch).erased()).is_none()
+                    || self.get_value(&lane_state(branch).erased()).is_none()
+                {
+                    panic!("Source branch {branch:?} is not a configured AgentLane");
+                }
+                MemoryForkPlan { plan, entry_ids }
+            }
+        }
+    }
+
+    fn apply_value_set_or_list_append(&mut self, write: &CommittedWrite) {
+        match write {
+            CommittedWrite::ValueSet {
+                seq,
+                namespace,
+                key,
+                value: v,
+            } => {
+                let pkey = physical_key(namespace, key);
+                self.scalar_values.insert(
+                    pkey,
+                    StoredValue {
+                        address: value(namespace, key),
+                        value: v.clone(),
+                        seq: *seq,
+                    },
+                );
+            }
+            CommittedWrite::ListAppend {
+                seq,
+                namespace,
+                key,
+                value: v,
+            } => {
+                let pkey = physical_key(namespace, key);
+                let element = ListElement {
+                    seq: *seq,
+                    value: v.clone(),
+                };
+                match self.list_values.get_mut(&pkey) {
+                    Some(stored) => stored.elements.push(element),
+                    None => {
+                        self.list_values.insert(
+                            pkey,
+                            StoredListSnapshot {
+                                address: list(namespace, key),
+                                elements: vec![element],
+                            },
+                        );
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
     }
 
     pub fn get_entries(&self, ids: &[String]) -> HashMap<String, Entry> {
@@ -339,6 +502,10 @@ impl InMemoryStorageState {
 
     pub fn get_stats(&self) -> SessionStats {
         self.stats.clone()
+    }
+
+    pub fn get_next_seq(&self) -> u64 {
+        self.next_seq
     }
 
     pub fn snapshot_entries_and_values(&self) -> (Vec<Entry>, Vec<StoredValue<Json>>) {

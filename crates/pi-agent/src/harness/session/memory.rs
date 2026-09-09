@@ -10,15 +10,12 @@ use tokio::sync::Mutex;
 
 use crate::harness::context::Context;
 use crate::harness::session::commit::CommittedWrite;
-use crate::harness::session::fork::{
-    ForkDestinationSnapshot, ForkSourceSnapshot, fork_snapshot_writes,
-};
 use crate::harness::session::in_memory_storage_state::InMemoryStorageState;
 use crate::harness::session::session::StorageBackedSession;
 use crate::harness::session::types::{
-    CommitResult, Entry, EntryScan, EntryStructure, EntryType, Session, SessionCreateOptions,
-    SessionMetadata, SessionRepo, SessionStats, Storage, StorageBranchScan, UsageRow, UsageScan,
-    Write,
+    CommitResult, Entry, EntryScan, EntryStructure, EntryType, ForkOptions, Session,
+    SessionCreateOptions, SessionMetadata, SessionRepo, SessionStats, Storage, StorageBranchScan,
+    UsageRow, UsageScan, Write,
 };
 use crate::harness::session::values::{
     ListElement, ListReadOptions, StoredValue, Value, ValueList,
@@ -52,18 +49,15 @@ impl MemoryStorage {
         }
     }
 
-    pub fn from_snapshot(snapshot: &ForkDestinationSnapshot) -> Self {
-        let storage = Self::new();
-        let writes = fork_snapshot_writes(snapshot);
-        {
-            let mut inner = storage.inner.blocking_lock();
-            inner
-                .storage_state
-                .validate_committed(&writes)
-                .expect("fork snapshot validation failed");
-            inner.storage_state.apply_validated(&writes);
-        }
-        storage
+    /// 对应 `fork`：从 live state 直接构造 destination storage。
+    pub fn fork(&self, options: &ForkOptions) -> Result<MemoryStorage, String> {
+        let inner = self.inner.blocking_lock();
+        self.assert_open(&inner)?;
+        let destination = MemoryStorage::new();
+        let mut dest_inner = destination.inner.blocking_lock();
+        dest_inner.storage_state = inner.storage_state.create_fork(options);
+        drop(dest_inner);
+        Ok(destination)
     }
 
     fn assert_open(&self, inner: &MemoryStorageInner) -> Result<(), String> {
@@ -71,17 +65,6 @@ impl MemoryStorage {
             return Err("MemoryStorage is closed".to_string());
         }
         Ok(())
-    }
-
-    fn capture_fork_source(&self) -> Result<ForkSourceSnapshot, String> {
-        let inner = self.inner.blocking_lock();
-        self.assert_open(&inner)?;
-        let (entries, scalar_values) = inner.storage_state.snapshot_entries_and_values();
-        Ok(ForkSourceSnapshot {
-            entries,
-            scalar_values,
-            entries_complete: Some(true),
-        })
     }
 }
 
@@ -309,10 +292,7 @@ impl SessionRepo for MemorySessionRepo {
             .get(&source.id)
             .cloned()
             .ok_or_else(|| format!("Session not found: {}", source.id))?;
-        let source_snapshot = record.storage.capture_fork_source()?;
-        let snapshot =
-            crate::harness::session::fork::create_fork_snapshot(&source_snapshot, &options);
-        let storage = Arc::new(MemoryStorage::from_snapshot(&snapshot));
+        let storage = Arc::new(record.storage.fork(&options)?);
         let id = match &options {
             crate::harness::session::types::ForkOptions::Branch { id, .. }
             | crate::harness::session::types::ForkOptions::Tree { id } => id.clone(),

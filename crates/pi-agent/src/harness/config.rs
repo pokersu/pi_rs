@@ -11,6 +11,7 @@ pub const DEFAULT_RETRY_POLICY: RetryPolicy = RetryPolicy {
     enabled: true,
     max_retries: 3,
     base_delay_ms: 1_000,
+    max_agent_delay_ms: Some(pi_ai::utils::retry::DEFAULT_MAX_AGENT_RETRY_DELAY_MS),
 };
 
 /// 对应 `validateToolNames`。
@@ -26,7 +27,10 @@ pub fn validate_tool_names(tools: &[impl AsRef<str>]) {
 
 /// 对应 `validateRetryPolicy`。
 pub fn validate_retry_policy(policy: &RetryPolicy) {
-    if policy.max_retries == u64::MAX || policy.base_delay_ms == u64::MAX {
+    if policy.max_retries == u64::MAX
+        || policy.base_delay_ms == u64::MAX
+        || policy.max_agent_delay_ms == Some(u64::MAX)
+    {
         panic!("Retry policy values must be finite non-negative safe integers");
     }
 }

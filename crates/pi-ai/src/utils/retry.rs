@@ -22,6 +22,20 @@ pub struct RetryPolicy {
     pub max_retries: u64,
     /// 基础延迟毫秒。每次尝试延迟为 `baseDelayMs * 2^(attempt-1)`（抖动前）。
     pub base_delay_ms: u64,
+    /// agent 级重试延迟的上限（毫秒）。默认 60 秒。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_agent_delay_ms: Option<u64>,
+}
+
+/// 对应 `DEFAULT_MAX_AGENT_RETRY_DELAY_MS`。
+pub const DEFAULT_MAX_AGENT_RETRY_DELAY_MS: u64 = 60_000;
+
+/// 对应 `retryDelayMs`：指数退避延迟，受 `maxAgentDelayMs` 上限约束。
+pub fn retry_delay_ms(base_delay_ms: u64, max_agent_delay_ms: Option<u64>, attempt: u64) -> u64 {
+    let shift = attempt.saturating_sub(1).min(63) as u32;
+    let delay = base_delay_ms.saturating_mul(1u64 << shift);
+    let cap = max_agent_delay_ms.unwrap_or(DEFAULT_MAX_AGENT_RETRY_DELAY_MS);
+    delay.min(cap)
 }
 
 /// 对应 `RetryCallbacks`：每次重试周围发出的可选回调。
@@ -197,9 +211,8 @@ where
             .clone()
             .unwrap_or_else(|| "Unknown error".to_string());
         last_retry = Some((attempt, error_message.clone()));
-        let shift = (attempt - 1).min(63) as u32;
         let delay_ms = policy
-            .map(|p| p.base_delay_ms.saturating_mul(1u64 << shift))
+            .map(|p| retry_delay_ms(p.base_delay_ms, p.max_agent_delay_ms, attempt))
             .unwrap_or(0);
         if let Some(callback) = callbacks.and_then(|c| c.on_retry_scheduled.as_ref()) {
             callback(attempt, max_attempts, delay_ms, error_message.clone()).await;

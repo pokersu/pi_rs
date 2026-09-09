@@ -3,15 +3,17 @@
 use std::time::Duration;
 
 use pi_ai::AbortSignal;
+use pi_ai::utils::retry::retry_delay_ms;
 
-/// 对应 `retryDelay`。
-pub fn retry_delay(base_delay_ms: u64, attempt: u32) -> u64 {
-    base_delay_ms.saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1)))
-}
+use crate::harness::session::types::NormalizedRetryPolicy;
 
 /// 对应 `retryNotBefore`。
-pub fn retry_not_before(base_delay_ms: u64, attempt: u32, now: u64) -> u64 {
-    now.saturating_add(retry_delay(base_delay_ms, attempt))
+pub fn retry_not_before(policy: &NormalizedRetryPolicy, attempt: u32, now: u64) -> u64 {
+    now.saturating_add(retry_delay_ms(
+        policy.base_delay_ms,
+        Some(policy.max_agent_delay_ms),
+        attempt as u64,
+    ))
 }
 
 /// 对应 `waitUntil`：等待到 `not_before` 或 abort。
