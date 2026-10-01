@@ -50,6 +50,7 @@ fn interrupted_assistant_message(
             response_model: None,
             response_id: None,
             provider_thinking_level: None,
+            thinking_level: None,
             usage: zero_usage(),
             stop_reason: StopReason::Error,
             deferred: None,

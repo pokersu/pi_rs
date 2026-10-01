@@ -16,8 +16,8 @@ use pi_ai::{
 
 use crate::types::{
     AfterToolCallContext, AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool,
-    AgentToolResult, BeforeToolCallContext, ShouldStopAfterTurnContext, StreamFn,
-    ToolExecutionMode,
+    AgentToolResult, AgentTurnContext, AgentTurnDecision, BeforeToolCallContext,
+    PrepareRequestContext, StreamFn, ToolExecutionMode,
 };
 
 /// 对应 `AgentEventSink`
@@ -338,7 +338,7 @@ async fn run_loop(
     emit: AgentEventSink,
     stream_fn: StreamFn,
 ) {
-    let mut last_completed_turn: Option<ShouldStopAfterTurnContext> = None;
+    let mut last_completed_turn: Option<AgentTurnContext> = None;
     let mut pending_messages: Vec<AgentMessage> = Vec::new();
 
     // 外层循环：agent 本应停止时，若出现 follow-up 消息则继续。
@@ -390,6 +390,26 @@ async fn run_loop(
                     .await;
                     current_context.messages.push(message.clone());
                     new_messages.push(message);
+                }
+            }
+
+            // 每次 provider 请求前（含首次）应用 `prepareRequest`。
+            if let Some(prepare) = &config.prepare_request {
+                let request = PrepareRequestContext {
+                    context: current_context.clone(),
+                    model: config.model.clone(),
+                    thinking_level: config.stream.reasoning,
+                };
+                if let Some(update) = prepare(&request, signal.clone()).await {
+                    if let Some(context) = update.context {
+                        *current_context = context;
+                    }
+                    if let Some(model) = update.model {
+                        config.model = model;
+                    }
+                    if let Some(level) = update.thinking_level {
+                        config.stream.reasoning = crate::types::to_ai_thinking_level(level);
+                    }
                 }
             }
 
@@ -449,27 +469,40 @@ async fn run_loop(
                 }
             }
 
-            emit(AgentEvent::TurnEnd {
-                message: AgentMessage::Assistant(message.clone()),
-                tool_results: tool_results.clone(),
-            })
-            .await;
-
-            last_completed_turn = Some(ShouldStopAfterTurnContext {
+            last_completed_turn = Some(AgentTurnContext {
                 message: message.clone(),
                 tool_results: tool_results.clone(),
                 context: current_context.clone(),
                 new_messages: new_messages.clone(),
             });
 
-            if let Some(should_stop) = &config.should_stop_after_turn
-                && should_stop(last_completed_turn.as_ref().unwrap()).await
-            {
-                emit(AgentEvent::AgentEnd {
-                    messages: new_messages.clone(),
-                })
-                .await;
-                return;
+            // `finishTurn` 在 assistant 与工具结果 finalize 后、`turn_end` 之前运行。
+            let turn_decision = match (&config.finish_turn, &last_completed_turn) {
+                (Some(finish), Some(turn)) => finish(turn, signal.clone()).await,
+                _ => None,
+            };
+
+            emit(AgentEvent::TurnEnd {
+                message: AgentMessage::Assistant(message.clone()),
+                tool_results: tool_results.clone(),
+            })
+            .await;
+
+            // 决策在 `turn_end` 之后应用（error/aborted 已是硬退出，不会走到这里）。
+            match turn_decision {
+                Some(AgentTurnDecision::End) => {
+                    emit(AgentEvent::AgentEnd {
+                        messages: new_messages.clone(),
+                    })
+                    .await;
+                    return;
+                }
+                // 确保再进行一次 provider 请求（工具结果/steering/follow-up 可满足它；
+                // 否则用当前上下文再发一次）。
+                Some(AgentTurnDecision::Continue) => {
+                    has_more_tool_calls = true;
+                }
+                None => {}
             }
 
             pending_messages = match &config.get_steering_messages {
@@ -599,6 +632,9 @@ async fn stream_assistant_response(
                     message: AgentMessage::Assistant(final_message.clone()),
                 })
                 .await;
+                // 对应上游在流结果上附加 `thinkingLevel: config.reasoning ?? "off"`。
+                let mut final_message = final_message;
+                final_message.thinking_level = config.stream.reasoning;
                 return final_message;
             }
         }
@@ -622,6 +658,8 @@ async fn stream_assistant_response(
         message: AgentMessage::Assistant(final_message.clone()),
     })
     .await;
+    let mut final_message = final_message;
+    final_message.thinking_level = config.stream.reasoning;
     final_message
 }
 

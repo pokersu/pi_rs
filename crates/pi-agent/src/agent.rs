@@ -18,8 +18,8 @@ use crate::agent_loop::{AgentEventSink, run_agent_loop, run_agent_loop_continue}
 use crate::stream_fn::get_default_stream_fn;
 use crate::types::{
     AfterToolCallFn, AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentState,
-    AgentTool, BeforeToolCallFn, ConvertToLlmFn, GetApiKeyFn, GetMessagesFn, PrepareNextTurnFn,
-    QueueMode, ShouldStopAfterTurnFn, StreamFn, ThinkingLevel, ToolExecutionMode,
+    AgentTool, BeforeToolCallFn, ConvertToLlmFn, FinishTurnFn, GetApiKeyFn, GetMessagesFn,
+    PrepareNextTurnFn, PrepareRequestFn, QueueMode, StreamFn, ThinkingLevel, ToolExecutionMode,
     TransformContextFn,
 };
 
@@ -90,6 +90,14 @@ impl PendingMessageQueue {
     fn clear(&mut self) {
         self.messages.clear();
     }
+
+    /// 预览下一次 `drain` 将取用的消息（不消费）。
+    fn peek(&self) -> Vec<AgentMessage> {
+        if self.mode == QueueMode::All {
+            return self.messages.clone();
+        }
+        self.messages.first().cloned().into_iter().collect()
+    }
 }
 
 /// 对应 `ActiveRun`
@@ -142,7 +150,8 @@ struct AgentInner {
     get_api_key: Option<GetApiKeyFn>,
     before_tool_call: Option<BeforeToolCallFn>,
     after_tool_call: Option<AfterToolCallFn>,
-    should_stop_after_turn: Option<ShouldStopAfterTurnFn>,
+    finish_turn: Option<FinishTurnFn>,
+    prepare_request: Option<PrepareRequestFn>,
     prepare_next_turn: Option<PrepareNextTurnFn>,
     prepare_next_turn_with_context: Option<PrepareNextTurnFn>,
     session_id: Option<String>,
@@ -162,7 +171,8 @@ impl AgentInner {
     }
 
     fn create_loop_config(&self, arc: &Arc<Mutex<AgentInner>>) -> AgentLoopConfig {
-        let should_stop = self.should_stop_after_turn.clone();
+        let finish_turn = self.finish_turn.clone();
+        let prepare_request = self.prepare_request.clone();
         let prepare = self
             .prepare_next_turn_with_context
             .clone()
@@ -186,7 +196,8 @@ impl AgentInner {
             convert_to_llm: self.convert_to_llm.clone(),
             transform_context: self.transform_context.clone(),
             get_api_key: self.get_api_key.clone(),
-            should_stop_after_turn: should_stop,
+            finish_turn,
+            prepare_request,
             prepare_next_turn: prepare,
             get_steering_messages: Some(make_queue_drain(arc.clone(), true)),
             get_follow_up_messages: Some(make_queue_drain(arc.clone(), false)),
@@ -211,7 +222,10 @@ pub struct AgentOptions {
     pub get_api_key: Option<GetApiKeyFn>,
     pub before_tool_call: Option<BeforeToolCallFn>,
     pub after_tool_call: Option<AfterToolCallFn>,
-    pub should_stop_after_turn: Option<ShouldStopAfterTurnFn>,
+    /// 对应 `finishTurn`（取代已删除的 `shouldStopAfterTurn`）。
+    pub finish_turn: Option<FinishTurnFn>,
+    /// 对应 `prepareRequest`。
+    pub prepare_request: Option<PrepareRequestFn>,
     pub prepare_next_turn: Option<PrepareNextTurnFn>,
     pub prepare_next_turn_with_context: Option<PrepareNextTurnFn>,
     pub steering_mode: Option<QueueMode>,
@@ -258,7 +272,8 @@ impl Agent {
             get_api_key: options.get_api_key,
             before_tool_call: options.before_tool_call,
             after_tool_call: options.after_tool_call,
-            should_stop_after_turn: options.should_stop_after_turn,
+            finish_turn: options.finish_turn,
+            prepare_request: options.prepare_request,
             prepare_next_turn: options.prepare_next_turn,
             prepare_next_turn_with_context: options.prepare_next_turn_with_context,
             session_id: options.session_id,
@@ -350,6 +365,17 @@ impl Agent {
     pub fn has_queued_messages(&self) -> bool {
         let inner = self.inner.lock().unwrap();
         inner.steering_queue.has_items() || inner.follow_up_queue.has_items()
+    }
+
+    /// 对应 `peekQueuedMessages`：预览下一轮将取用的消息（不消费）。
+    /// steering 队列非空时优先返回它，否则返回 follow-up 队列。
+    pub fn peek_queued_messages(&self) -> Vec<AgentMessage> {
+        let inner = self.inner.lock().unwrap();
+        let steering = inner.steering_queue.peek();
+        if !steering.is_empty() {
+            return steering;
+        }
+        inner.follow_up_queue.peek()
     }
 
     /// 对应 `signal` getter
@@ -641,6 +667,7 @@ fn failure_message(aborted: bool, message: String) -> AgentMessage {
         response_model: None,
         response_id: None,
         provider_thinking_level: None,
+        thinking_level: None,
         usage: default_usage(),
         stop_reason: if aborted {
             StopReason::Aborted

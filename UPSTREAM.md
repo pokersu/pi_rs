@@ -5,15 +5,20 @@
 
 ## 当前状态
 
-- **已同步到上游 commit**：`f3564a1d`
-- **同步日期**：2026-09-10
-- **本地对应提交**：`9cdb3b5` — feat(pi-agent): sync upstream fork/retry/text-line-reader to f3564a1d
-- **上次同步范围**：`9767ba275..f3564a1d`（31 个 commit）中的核心部分
-  - fork 重构（fork-policy / fork / in-memory-storage-state / memory）
-  - JSONL 两阶段流式 fork（新增 `jsonl/fork.rs`、`jsonl/io.rs`）
-  - retry 退避上限（`maxAgentDelayMs` → `retry_delay_ms` cap）
-  - `open_text_line_reader`（TextLineReader）
-  - 另有 harness fault 路径修复（`af4136f`，对齐上游 fault 语义）
+- **已同步到上游 tag**：`v0.99.2`（2026-09-30）
+- **同步日期**：2026-10-01
+- **本次同步范围**：`f3564a1d..v0.99.2`（312 个 commit / 12 个 tag），按 `UPSTREAM-SYNC-v0.99.2.md` 的 P1–P7 分阶段移植
+- **本地提交链**：`d07a2ab`(P1) → `bce7b0b`(P2) → `e3c01c4`(P3a) → `080a062`(P3b) → P4/P5 提交
+- **已知偏差（本次未同步）**：
+  - `onProviderStreamEvent`（0.99.0）未实现 —— 需穿透 provider 流层（`StreamOptions` + 各 provider 的事件解析处），属独立改动
+  - overflow 的 Z.AI CN 端点检测（可选，本项目未使用 Z.AI）
+  - HTTP-date 形式的 `Retry-After` 仍为简化实现（上游用 `Date.parse`，Rust 侧忽略该 header 走指数退避）
+
+### 上一轮（历史）
+
+- **曾同步到**：`f3564a1d`（= `v0.85.1-35-gf3564a1d4`），2026-09-10，本地提交 `9cdb3b5`
+  - fork 重构 / JSONL 两阶段流式 fork / retry 退避上限 / `open_text_line_reader`
+  - 另有 harness fault 路径修复（`af4136f`）
 
 ## 待同步（已识别，尚未移植）
 
@@ -31,11 +36,10 @@
 - ✅ **P2 transcript 工具层**（2026-10-01 完成）：新增 `utils/transcript.rs`（17 个导出）+ `TranscriptContext` 类型 + `sections` 改为 `IndexMap`（保插入序）；新增 10 个测试。**stream 入口切换与 provider 消费并入 P3**。
 - ✅ **P3a provider 侧接入 transcript**（2026-10-01 完成）：`openai-responses` / `openai-completions` 改为 `normalize_context` → `resolve_transcript` → `resolve_transcript_tools`；删除内联 `split_deferred_tools`，新增 `append_system_tool_additions`（非首条 system 的 `toolsAdded` → `additional_tools` / `tool_search`）；completions 引入 `instructionRole` 与 Kimi 风格 `system+tools`；`namespace` 回放改为只看 `is_same_model`（对齐上游）；`Compat` 新增 `supportsMidConvoSystemMessages`。3 个新测试。
 - ✅ **P3b agent-loop 侧**（2026-10-01 完成）：`agent-loop.rs` 新增 `declare_tool_changes`（把可执行工具集与 transcript 声明之差写成 system 消息的 `toolsAdded`/`toolsRemoved`）+ `with_tool_changes` / `declared_tools` / `executable_tools`；`fold_initial_system_message` 把 `systemPrompt`+`tools` 折叠为首条 system 消息（字段清空）；在 `run_agent_loop` 入口与 `run_loop` 每轮 pending 注入前接入。`drive/tool-placement.rs` 移除 `activeToolNames` 自动增量写回与 `ConfigUpdate::ActiveTools` 事件（工具激活改为显式：`setActiveTools` / 调用方更新工具集，装载变化由 transcript 承载）。7 个新测试。
-- ⬜ P4 循环钩子 Breaking（`finishTurn` / `prepareRequest` / `peekQueuedMessages`）
-- ⬜ P5 小项（`thinkingLevel` / `onProviderStreamEvent` / image / retry / overflow）
-- ⬜ P6 telemetry
-- ⬜ P7 验证与收尾
-
+- ✅ **P4 循环钩子 Breaking**（2026-10-01 完成）：新增 `finishTurn`（返回 `AgentTurnDecision::End|Continue`，在 assistant+工具结果 finalize 后、`turn_end` 前运行，决策在 `turn_end` 后应用）取代 `shouldStopAfterTurn`；新增 `prepareRequest`（每次 provider 请求前，含首次，可替换 context/model/thinkingLevel）；新增 `Agent.peekQueuedMessages()`；`AgentTurnContext` 取代 `ShouldStopAfterTurnContext`（旧名保留为别名）。2 个新集成测试。
+- ✅ **P5 小项**（2026-10-01 完成）：`AssistantMessage.thinkingLevel`（25 处构造点补齐，agent-loop 两处填充）；image 检测改为 `GIF87a`/`GIF89a`（避免文本文件误判）；provider-retry 对非有限 `Retry-After` 回落指数退避。**未做**：`onProviderStreamEvent`（需穿透 provider 流层，独立改动）、overflow Z.AI CN 检测（可选）。
+- ✅ **P6 telemetry**（2026-10-01 确认无需代码改动）：上游仅改 CHANGELOG 与 package.json 版本号，源码零改动。
+- ✅ **P7 验证与收尾**（2026-10-01 完成）：`cargo check` / `clippy`（0 告警）/ `test`（21 套件全绿）/ `fmt` 全部通过；AGENT.md 与方案文档已同步。
 ### 待同步清单（按优先级）
 
 1. **〔重大〕Mid-conversation system messages**（commit `9e05370b2`，PR #9548）

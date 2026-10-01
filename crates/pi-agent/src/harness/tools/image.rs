@@ -18,7 +18,8 @@ pub fn detect_supported_image_mime_type(buffer: &[u8]) -> Option<&'static str> {
             None
         };
     }
-    if starts_with_ascii(buffer, 0, "GIF") {
+    // GIF87a / GIF89a：避免把以 "GIF" 开头的文本文件误判为图片（对齐上游修复）。
+    if starts_with_ascii(buffer, 0, "GIF87a") || starts_with_ascii(buffer, 0, "GIF89a") {
         return Some("image/gif");
     }
     if starts_with_ascii(buffer, 0, "RIFF") && starts_with_ascii(buffer, 8, "WEBP") {

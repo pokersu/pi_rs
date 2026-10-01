@@ -22,7 +22,8 @@ fn make_config(model: pi_ai::Model) -> AgentLoopConfig {
         convert_to_llm: Arc::new(identity_convert),
         transform_context: None,
         get_api_key: None,
-        should_stop_after_turn: None,
+        finish_turn: None,
+        prepare_request: None,
         prepare_next_turn: None,
         get_steering_messages: None,
         get_follow_up_messages: None,
@@ -92,6 +93,96 @@ async fn agent_loop_streams_text_response() {
         .collect();
     assert_eq!(text, "hello world");
     assert_eq!(assistant.stop_reason, StopReason::Stop);
+}
+
+#[tokio::test]
+async fn finish_turn_end_stops_run_after_first_turn() {
+    let handle = faux_provider(Vec::new());
+    let model = handle.provider.get_models().into_iter().next().unwrap();
+    // 准备两个响应；若 finishTurn 未生效则会跑两轮。
+    handle.set_responses(vec![
+        faux_assistant_message(vec![faux_text("first")], StopReason::Stop),
+        faux_assistant_message(vec![faux_text("second")], StopReason::Stop),
+    ]);
+    let stream_fn = faux_stream_fn(Arc::new(handle));
+
+    let context = AgentContext {
+        system_prompt: String::new(),
+        messages: Vec::new(),
+        tools: None,
+    };
+    let prompts = vec![AgentMessage::User(pi_ai::UserMessage {
+        content: pi_ai::UserContent::Text("hi".into()),
+        timestamp: 0,
+    })];
+    let (emit, events) = sink();
+
+    let mut config = make_config(model);
+    config.finish_turn = Some(Arc::new(|_turn, _signal| {
+        Box::pin(async { Some(pi_agent::types::AgentTurnDecision::End) })
+    }));
+
+    let messages = run_agent_loop(prompts, context, config, None, emit, stream_fn).await;
+
+    let assistant_count = messages
+        .iter()
+        .filter(|m| matches!(m, AgentMessage::Assistant(_)))
+        .count();
+    assert_eq!(assistant_count, 1, "finishTurn 返回 End 应在首轮后结束");
+
+    let has_agent_end = events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|event| matches!(event, AgentEvent::AgentEnd { .. }));
+    assert!(has_agent_end, "应发出 agent_end");
+}
+
+#[tokio::test]
+async fn prepare_request_runs_before_request_and_sees_folded_system_message() {
+    let handle = faux_provider(Vec::new());
+    let model = handle.provider.get_models().into_iter().next().unwrap();
+    handle.set_responses(vec![faux_assistant_message(
+        vec![faux_text("ok")],
+        StopReason::Stop,
+    )]);
+    let stream_fn = faux_stream_fn(Arc::new(handle));
+
+    let context = AgentContext {
+        system_prompt: "be nice".into(),
+        messages: Vec::new(),
+        tools: None,
+    };
+    let prompts = vec![AgentMessage::User(pi_ai::UserMessage {
+        content: pi_ai::UserContent::Text("hi".into()),
+        timestamp: 0,
+    })];
+    let (emit, _events) = sink();
+
+    let calls = Arc::new(Mutex::new(0usize));
+    let seen_system = Arc::new(Mutex::new(false));
+    let calls_clone = Arc::clone(&calls);
+    let seen_clone = Arc::clone(&seen_system);
+
+    let mut config = make_config(model);
+    config.prepare_request = Some(Arc::new(move |request, _signal| {
+        *calls_clone.lock().unwrap() += 1;
+        if matches!(
+            request.context.messages.first(),
+            Some(AgentMessage::System(_))
+        ) {
+            *seen_clone.lock().unwrap() = true;
+        }
+        Box::pin(async { None })
+    }));
+
+    run_agent_loop(prompts, context, config, None, emit, stream_fn).await;
+
+    assert!(*calls.lock().unwrap() >= 1, "prepareRequest 应在请求前运行");
+    assert!(
+        *seen_system.lock().unwrap(),
+        "此时 systemPrompt 已折叠进首条 system 消息"
+    );
 }
 
 #[tokio::test]
@@ -242,6 +333,7 @@ async fn stream_without_start_event_keeps_context_intact() {
                     response_model: None,
                     response_id: None,
                     provider_thinking_level: None,
+                    thinking_level: None,
                     usage: default_usage(),
                     stop_reason: if is_first {
                         StopReason::ToolUse

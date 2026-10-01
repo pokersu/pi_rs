@@ -70,6 +70,7 @@ pub fn faux_assistant_message(
         response_model: None,
         response_id: None,
         provider_thinking_level: None,
+        thinking_level: None,
         usage: default_usage(),
         stop_reason,
         deferred: None,

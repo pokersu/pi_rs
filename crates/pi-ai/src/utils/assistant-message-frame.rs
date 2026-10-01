@@ -182,6 +182,7 @@ fn clone_start_message(message: &AssistantMessage) -> AssistantMessage {
         response_model: message.response_model.clone(),
         response_id: message.response_id.clone(),
         provider_thinking_level: message.provider_thinking_level.clone(),
+        thinking_level: message.thinking_level,
         usage: message.usage.clone(),
         stop_reason: StopReason::Pending,
         deferred: None,

@@ -85,6 +85,7 @@ pub fn get_retry_delay_ms(
         .get("retry-after-ms")
         .and_then(|v| v.to_str().ok())
         && let Ok(value) = retry_after_ms.parse::<f64>()
+        && value.is_finite()
     {
         return validate_server_retry_delay_ms(value, max_retry_delay_ms, &error.message);
     }
@@ -96,7 +97,10 @@ pub fn get_retry_delay_ms(
         && let Ok(seconds) = retry_after.parse::<f64>()
     {
         let delay_ms = seconds * 1000.0;
-        return validate_server_retry_delay_ms(delay_ms, max_retry_delay_ms, &error.message);
+        // 非有限值（NaN/Infinity）视为不可解析，回落到指数退避（对齐上游修复）。
+        if delay_ms.is_finite() {
+            return validate_server_retry_delay_ms(delay_ms, max_retry_delay_ms, &error.message);
+        }
     }
     // HTTP-date 形式的 `retry-after` 需要日期解析，Rust 无内置等价物；此处忽略该
     // header，走指数退避（原版用 `Date.parse`，属合理简化）。

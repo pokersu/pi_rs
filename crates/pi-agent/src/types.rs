@@ -221,17 +221,20 @@ pub struct AgentContext {
     pub tools: Option<Vec<AgentTool>>,
 }
 
-/// 对应 `ShouldStopAfterTurnContext` / `PrepareNextTurnContext`
+/// 对应 `AgentTurnContext`（一次已完成的 turn：assistant 消息 + 工具结果 + 运行快照）。
 #[derive(Debug, Clone)]
-pub struct ShouldStopAfterTurnContext {
+pub struct AgentTurnContext {
     pub message: AssistantMessage,
     pub tool_results: Vec<ToolResultMessage>,
     pub context: AgentContext,
     pub new_messages: Vec<AgentMessage>,
 }
 
+/// 兼容旧名（上游 v0.99.2 已用 `AgentTurnContext` 取代 `ShouldStopAfterTurnContext`）。
+pub type ShouldStopAfterTurnContext = AgentTurnContext;
+
 /// 对应 `PrepareNextTurnContext`
-pub type PrepareNextTurnContext = ShouldStopAfterTurnContext;
+pub type PrepareNextTurnContext = AgentTurnContext;
 
 /// 对应 `AgentLoopTurnUpdate`
 #[derive(Debug, Clone)]
@@ -340,9 +343,58 @@ pub type TransformContextFn = Arc<
 pub type GetApiKeyFn =
     Arc<dyn Fn(&str) -> Pin<Box<dyn Future<Output = Option<String>> + Send>> + Send + Sync>;
 
-/// 对应 `shouldStopAfterTurn`
-pub type ShouldStopAfterTurnFn = Arc<
-    dyn Fn(&ShouldStopAfterTurnContext) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync,
+/// 对应 `AgentTurnDecision`（`FinishTurn` 的返回值）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentTurnDecision {
+    /// `{ action: "continue" }`：确保再进行一次 provider 请求。
+    Continue,
+    /// `{ action: "end" }`：结束本次正常 run（不动 steering/follow-up 队列，跳过 prepareNextTurn）。
+    End,
+}
+
+/// 对应 `FinishTurn`：在 assistant 与全部工具结果 finalize 后、`turn_end` 之前运行。
+///
+/// 返回 `End` 结束正常 run；`Continue` 确保再进行一次 provider 请求（工具结果/steering/follow-up
+/// 可满足该请求，否则用当前上下文再发一次）；`None` 保持正常调度。
+/// error/aborted 响应仍为硬退出（其决策被忽略）。
+pub type FinishTurnFn = Arc<
+    dyn Fn(
+            &AgentTurnContext,
+            Option<AbortSignal>,
+        ) -> Pin<Box<dyn Future<Output = Option<AgentTurnDecision>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// 对应 `PrepareRequestContext`（每次 provider 请求前的运行时状态）。
+#[derive(Debug, Clone)]
+pub struct PrepareRequestContext {
+    pub context: AgentContext,
+    pub model: Model,
+    /// 对应上游 `ThinkingLevel`；Rust 侧与 `stream.reasoning` 一致（`off` 表示为 `None`）。
+    pub thinking_level: Option<pi_ai::ThinkingLevel>,
+}
+
+/// 对应 `AgentRequestUpdate`（`Omit<AgentLoopTurnUpdate, "messages">`）。
+#[derive(Debug, Clone, Default)]
+pub struct AgentRequestUpdate {
+    pub context: Option<AgentContext>,
+    pub model: Option<Model>,
+    /// `None` 表示不更新；`Some` 可表达包括 `Off` 在内的任意等级。
+    pub thinking_level: Option<ThinkingLevel>,
+}
+
+/// 对应 `PrepareRequest`：每次 provider 请求前运行（含首次）。
+///
+/// 此时 pending 消息已 append 并 emit；返回的 context/model/thinkingLevel 替换本次及后续请求的运行时值；
+/// 该回调**不轮询队列**。
+pub type PrepareRequestFn = Arc<
+    dyn Fn(
+            &PrepareRequestContext,
+            Option<AbortSignal>,
+        ) -> Pin<Box<dyn Future<Output = Option<AgentRequestUpdate>> + Send>>
+        + Send
+        + Sync,
 >;
 
 /// 对应 `prepareNextTurn`
@@ -387,8 +439,11 @@ pub struct AgentLoopConfig {
     pub convert_to_llm: ConvertToLlmFn,
     pub transform_context: Option<TransformContextFn>,
     pub get_api_key: Option<GetApiKeyFn>,
-    pub should_stop_after_turn: Option<ShouldStopAfterTurnFn>,
     pub prepare_next_turn: Option<PrepareNextTurnFn>,
+    /// 对应 `finishTurn`（取代已删除的 `shouldStopAfterTurn`）。
+    pub finish_turn: Option<FinishTurnFn>,
+    /// 对应 `prepareRequest`（每次 provider 请求前，含首次）。
+    pub prepare_request: Option<PrepareRequestFn>,
     pub get_steering_messages: Option<GetMessagesFn>,
     pub get_follow_up_messages: Option<GetMessagesFn>,
     pub before_tool_call: Option<BeforeToolCallFn>,

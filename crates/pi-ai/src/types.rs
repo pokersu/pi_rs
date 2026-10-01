@@ -459,6 +459,10 @@ pub struct AssistantMessage {
     /// 对应 `providerThinkingLevel`：provider 实际使用的 effort level（legacy 或 unmanaged 响应为 None）。
     #[serde(default)]
     pub provider_thinking_level: Option<String>,
+    /// 对应 `AssistantMessage.thinkingLevel`：agent loop 为本次响应请求的 thinking level
+    /// （Rust 侧 `off` 表示为 `None`）。
+    #[serde(default)]
+    pub thinking_level: Option<ThinkingLevel>,
     pub usage: Usage,
     pub stop_reason: StopReason,
     pub deferred: Option<DeferredHandle>,
