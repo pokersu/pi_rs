@@ -82,6 +82,12 @@
 9. **流式事件回放复用**：网络层是真正的 SSE 流式读取，事件层复用 `faux` 的 `stream_with_deltas`（累积后按事件序列回放）。
 10. **`OAuthCredential` 的 index signature**：TS 用 `[key: string]: unknown` 承载 `scope`/`accountId`/`enterpriseUrl` 等 provider 附加字段，Rust 用 `extra: BTreeMap<String, serde_json::Value>`（`serde(flatten)`）承载。
 11. **deferred 响应能力已对齐**：`Models` 已实现 `stream_deferred`/`fetch_deferred`/`cancel_deferred`，`Provider` trait 带可选 `fetch_deferred`/`cancel_deferred`（默认 `None`/错误，与原版 `Api.fetchDeferred?` 一致）；openai/deepseek 与原版一样不实现 deferred（responses 的 `in_progress` 视为 `stop`），仅 faux 提供完整 deferred 回放。
+12. **system 消息进入消息模型（对齐 v0.99.2 的 mid-conversation system messages）**：`Message` 新增 `System(SystemMessage)` 变体（`SystemContent` = `string | TextContent[]`，含 `sections`/`toolsAdded`/`toolsRemoved`/`timestamp`），`ToolReference` 同步引入；`utils/text.rs` 新增 `get_system_message_text`/`render_system_message_update`（前者用于首条 base prompt 渲染，后者把中途插入的 system 消息包装为带分节名的更新）。
+    - `sections` 在 Rust 用 `BTreeMap`（按名字有序）；上游为 JS 对象（插入序）。上游文档也建议避免数字型分节名（JSON 会重排）。
+    - `estimate_message_tokens` 对 system 按「文本 + toolsAdded + toolsRemoved」估算（与上游一致）。
+    - `transform_messages` 两遍处理对齐：system 与 user 一样原样透传；若存在未结算的 toolCall，则暂存 system 消息、待合成 toolResult 之后再放回。
+    - `openai-responses`/`openai-completions` 的 system 分支已接入（首条用 `get_system_message_text`、后续用 `render_system_message_update`；responses 按 `instructionRole` 选择 `developer`/`system`）。**中间 system 消息的 `toolsAdded` 注入（additional_tools / tool_search / Kimi 风格 tools）留待 P3**（需先完成 transcript 层）。
+    - 注：`Context.system_prompt` 与新的 system 消息目前**并存**；上游的 `normalizeContext`（把前者折叠成首条 system 消息）由 P2 的 transcript 层引入。
 
 ## 阅读步骤
 

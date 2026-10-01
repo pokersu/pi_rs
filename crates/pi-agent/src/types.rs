@@ -99,6 +99,7 @@ pub struct CompactionSummaryMessage {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "role", rename_all = "camelCase")]
 pub enum AgentMessage {
+    System(pi_ai::SystemMessage),
     User(pi_ai::UserMessage),
     Assistant(pi_ai::AssistantMessage),
     ToolResult(pi_ai::ToolResultMessage),
@@ -111,6 +112,7 @@ pub enum AgentMessage {
 impl AgentMessage {
     pub fn role(&self) -> &'static str {
         match self {
+            AgentMessage::System(_) => "system",
             AgentMessage::User(_) => "user",
             AgentMessage::Assistant(_) => "assistant",
             AgentMessage::ToolResult(_) => "toolResult",

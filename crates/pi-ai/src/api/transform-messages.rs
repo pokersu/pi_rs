@@ -155,30 +155,32 @@ fn insert_synthetic_tool_results(
     result: &mut Vec<Message>,
     pending_tool_calls: &mut Vec<ToolCall>,
     existing_tool_result_ids: &mut HashSet<String>,
+    held_system_messages: &mut Vec<Message>,
 ) {
-    if pending_tool_calls.is_empty() {
-        return;
-    }
-    for tool_call in pending_tool_calls.iter() {
-        if !existing_tool_result_ids.contains(&tool_call.id) {
-            result.push(Message::ToolResult(ToolResultMessage {
-                tool_call_id: tool_call.id.clone(),
-                tool_name: tool_call.name.clone(),
-                content: vec![TextOrImageContent::Text(TextContent {
-                    kind: TextKind,
-                    text: "No result provided".to_string(),
-                    text_signature: None,
-                })],
-                details: None,
-                usage: None,
-                added_tool_names: None,
-                is_error: true,
-                timestamp: now_ms(),
-            }));
+    if !pending_tool_calls.is_empty() {
+        for tool_call in pending_tool_calls.iter() {
+            if !existing_tool_result_ids.contains(&tool_call.id) {
+                result.push(Message::ToolResult(ToolResultMessage {
+                    tool_call_id: tool_call.id.clone(),
+                    tool_name: tool_call.name.clone(),
+                    content: vec![TextOrImageContent::Text(TextContent {
+                        kind: TextKind,
+                        text: "No result provided".to_string(),
+                        text_signature: None,
+                    })],
+                    details: None,
+                    usage: None,
+                    added_tool_names: None,
+                    is_error: true,
+                    timestamp: now_ms(),
+                }));
+            }
         }
+        pending_tool_calls.clear();
+        existing_tool_result_ids.clear();
     }
-    pending_tool_calls.clear();
-    existing_tool_result_ids.clear();
+    // 对应 `closePendingToolCalls` 尾部：把暂存的 system 消息按序放回。
+    result.append(held_system_messages);
 }
 
 fn now_ms() -> u64 {
@@ -201,6 +203,8 @@ pub fn transform_messages(
     let transformed: Vec<Message> = image_aware
         .iter()
         .map(|msg| match msg {
+            // System 与 user 消息原样透传（对应上游第一遍）。
+            Message::System(_) => msg.clone(),
             Message::User(_) => msg.clone(),
             Message::ToolResult(result) => {
                 if let Some(normalized_id) = tool_call_id_map.get(&result.tool_call_id)
@@ -230,6 +234,7 @@ pub fn transform_messages(
     let mut result: Vec<Message> = Vec::new();
     let mut pending_tool_calls: Vec<ToolCall> = Vec::new();
     let mut existing_tool_result_ids: HashSet<String> = HashSet::new();
+    let mut held_system_messages: Vec<Message> = Vec::new();
 
     for msg in &transformed {
         match msg {
@@ -238,6 +243,7 @@ pub fn transform_messages(
                     &mut result,
                     &mut pending_tool_calls,
                     &mut existing_tool_result_ids,
+                    &mut held_system_messages,
                 );
                 if assistant.stop_reason == StopReason::Error
                     || assistant.stop_reason == StopReason::Aborted
@@ -267,8 +273,17 @@ pub fn transform_messages(
                     &mut result,
                     &mut pending_tool_calls,
                     &mut existing_tool_result_ids,
+                    &mut held_system_messages,
                 );
                 result.push(msg.clone());
+            }
+            Message::System(_) => {
+                // 存在未结算 toolCall 时暂存 system 消息，待结算后再放回。
+                if pending_tool_calls.is_empty() {
+                    result.push(msg.clone());
+                } else {
+                    held_system_messages.push(msg.clone());
+                }
             }
         }
     }
@@ -276,6 +291,7 @@ pub fn transform_messages(
         &mut result,
         &mut pending_tool_calls,
         &mut existing_tool_result_ids,
+        &mut held_system_messages,
     );
 
     result

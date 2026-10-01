@@ -135,6 +135,8 @@ const ESTIMATED_IMAGE_CHARS: usize = 4800;
 /// 对应 `estimateTokens`
 pub fn estimate_tokens(message: &AgentMessage) -> u64 {
     let chars = match message {
+        // 上游 `estimateTokens` 未列 system 分支：system 消息不参与压缩预算。
+        AgentMessage::System(_) => 0,
         AgentMessage::User(u) => match &u.content {
             pi_ai::UserContent::Text(t) => t.len(),
             pi_ai::UserContent::Blocks(blocks) => blocks
@@ -189,7 +191,8 @@ fn is_valid_cut_point(entry: &Entry) -> bool {
             | AgentMessage::Custom(_)
             | AgentMessage::BranchSummary(_)
             | AgentMessage::CompactionSummary(_) => true,
-            AgentMessage::ToolResult(_) => false,
+            // 上游 `findValidCutPoints` 未列 system：不可作为压缩切点。
+            AgentMessage::System(_) | AgentMessage::ToolResult(_) => false,
         },
         Entry::BranchSummary(_) => true,
         _ => false,
@@ -402,6 +405,7 @@ pub struct CompactionDetails {
 
 fn message_timestamp(message: &AgentMessage) -> u64 {
     match message {
+        AgentMessage::System(m) => m.timestamp,
         AgentMessage::User(m) => m.timestamp,
         AgentMessage::Assistant(m) => m.timestamp,
         AgentMessage::ToolResult(m) => m.timestamp,

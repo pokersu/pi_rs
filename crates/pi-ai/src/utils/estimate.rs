@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use crate::types::{
     ContentBlock, Context, Message, StopReason, TextOrImageContent, Tool, Usage, UserContent,
 };
+use crate::utils::text::get_system_message_text;
 
 /// 对应 `ContextUsageEstimate`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +61,19 @@ pub fn estimate_text_and_image_content_tokens(blocks: &[TextOrImageContent]) -> 
 /// 对应 `estimateMessageTokens(message)`
 pub fn estimate_message_tokens(message: &Message) -> u64 {
     match message {
+        Message::System(system) => {
+            estimate_text_tokens(&get_system_message_text(system))
+                + system
+                    .tools_added
+                    .as_deref()
+                    .map(estimate_tools_tokens)
+                    .unwrap_or(0)
+                + system
+                    .tools_removed
+                    .as_deref()
+                    .map(estimate_tools_tokens)
+                    .unwrap_or(0)
+        }
         Message::User(user) => match &user.content {
             UserContent::Text(text) => estimate_text_tokens(text),
             UserContent::Blocks(blocks) => estimate_text_and_image_content_tokens(blocks),
@@ -85,6 +99,7 @@ pub fn estimate_message_tokens(message: &Message) -> u64 {
 
 fn message_timestamp(message: &Message) -> u64 {
     match message {
+        Message::System(system) => system.timestamp,
         Message::User(user) => user.timestamp,
         Message::Assistant(assistant) => assistant.timestamp,
         Message::ToolResult(result) => result.timestamp,
@@ -140,7 +155,8 @@ fn estimate_messages(messages: &[Message]) -> ContextUsageEstimate {
     }
 }
 
-fn estimate_tools_tokens(tools: &[Tool]) -> u64 {
+/// 对应 `estimateToolsTokens(tools)`（接受 `Tool[]` 或 `ToolReference[]`）。
+fn estimate_tools_tokens<T: serde::Serialize>(tools: &[T]) -> u64 {
     if tools.is_empty() {
         return 0;
     }

@@ -384,6 +384,42 @@ pub struct DeferredFetchOptions {
 /// 对应 `DeferredCancelOptions`。
 pub type DeferredCancelOptions = ProviderRequestOptions;
 
+/// 对应 `SystemMessage.content: string | TextContent[]`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SystemContent {
+    Text(String),
+    Blocks(Vec<TextContent>),
+}
+
+/// 对应 `SystemMessage`。
+///
+/// 让 system prompt 文本与工具变更成为 transcript 的一部分：
+/// 首条消息是 base prompt，后续消息是追加指令；工具可用性变化由
+/// `tools_added` / `tools_removed` 记录，而不是静默重写请求起始条件。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemMessage {
+    pub content: SystemContent,
+    /// 具名、有序的提示分节：首条声明，后续按名替换，`None` 表示删除。
+    #[serde(default)]
+    pub sections: Option<BTreeMap<String, Option<String>>>,
+    /// 在此点变为可用的工具的完整定义。
+    #[serde(default)]
+    pub tools_added: Option<Vec<Tool>>,
+    /// 在此点失效的工具。
+    #[serde(default)]
+    pub tools_removed: Option<Vec<ToolReference>>,
+    pub timestamp: u64,
+}
+
+/// 对应 `ToolReference`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolReference {
+    pub name: String,
+}
+
 /// 对应 `UserMessage`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -444,12 +480,13 @@ pub struct ToolResultMessage {
     pub timestamp: u64,
 }
 
-/// 对应 `Message = UserMessage | AssistantMessage | ToolResultMessage`
+/// 对应 `Message = SystemMessage | UserMessage | AssistantMessage | ToolResultMessage`
 // TS 中是引用语义的 union，Rust 中为保持结构一致不装箱（`Box`），故允许 variant 大小差异。
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "camelCase")]
 pub enum Message {
+    System(SystemMessage),
     User(UserMessage),
     Assistant(AssistantMessage),
     ToolResult(ToolResultMessage),
@@ -458,6 +495,7 @@ pub enum Message {
 impl Message {
     pub fn role(&self) -> &'static str {
         match self {
+            Message::System(_) => "system",
             Message::User(_) => "user",
             Message::Assistant(_) => "assistant",
             Message::ToolResult(_) => "toolResult",

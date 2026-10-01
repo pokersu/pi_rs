@@ -130,6 +130,7 @@ pub fn convert_to_llm(messages: Vec<AgentMessage>) -> Vec<Message> {
                 timestamp: s.timestamp,
             })),
             AgentMessage::User(u) => Some(Message::User(u)),
+            AgentMessage::System(s) => Some(Message::System(s)),
             AgentMessage::Assistant(a) => Some(Message::Assistant(a)),
             AgentMessage::ToolResult(r) => Some(Message::ToolResult(r)),
         })

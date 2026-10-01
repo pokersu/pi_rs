@@ -102,6 +102,8 @@ pub fn serialize_conversation(messages: &[Message]) -> String {
 
     for msg in messages {
         match msg {
+            // 上游 `serializeConversation` 未处理 system：不纳入摘要文本。
+            Message::System(_) => {}
             Message::User(user) => {
                 let content = match &user.content {
                     pi_ai::UserContent::Text(t) => t.clone(),

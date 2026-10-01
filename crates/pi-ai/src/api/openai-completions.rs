@@ -25,8 +25,24 @@ fn build_messages(context: &Context) -> Vec<Value> {
     {
         messages.push(json!({ "role": "system", "content": system }));
     }
-    for msg in &context.messages {
+    for (msg_index, msg) in context.messages.iter().enumerate() {
         match msg {
+            crate::types::Message::System(system) => {
+                // 首条 system 消息是 base prompt；后续为中途更新。
+                // TODO(P3)：i > 0 且 `anchorsAdditions` 时注入 toolsAdded（Kimi 风格 system+tools），
+                //            并按上游引入 instructionRole（developer/system）。
+                let text = if msg_index == 0 {
+                    crate::utils::text::get_system_message_text(system)
+                } else {
+                    crate::utils::text::render_system_message_update(system)
+                };
+                if !text.is_empty() {
+                    messages.push(json!({
+                        "role": "system",
+                        "content": crate::utils::sanitize_unicode::sanitize_surrogates(&text)
+                    }));
+                }
+            }
             crate::types::Message::User(u) => match &u.content {
                 crate::types::UserContent::Text(s) => {
                     messages.push(json!({ "role": "user", "content": s }));

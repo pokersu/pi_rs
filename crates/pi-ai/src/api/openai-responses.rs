@@ -337,19 +337,37 @@ fn convert_messages(
         Some(&normalize_tool_call_id),
     );
 
+    // 对应 `instructionRole`：reasoning 模型且 compat 允许时使用 developer role。
+    let instruction_role = if model.reasoning && compat.supports_developer_role {
+        "developer"
+    } else {
+        "system"
+    };
+
     if let Some(system) = &context.system_prompt
         && !system.is_empty()
     {
-        let role = if model.reasoning && compat.supports_developer_role {
-            "developer"
-        } else {
-            "system"
-        };
-        items.push(json!({ "role": role, "content": system }));
+        items.push(json!({ "role": instruction_role, "content": system }));
     }
 
     for (msg_index, msg) in normalized_messages.iter().enumerate() {
         match msg {
+            crate::types::Message::System(system) => {
+                // 首条 system 消息是 base prompt；后续为中途更新。
+                // TODO(P3)：非首条且 provider 支持时，先把 toolsAdded 注入为
+                //            additional_tools / tool_search 项（对应 appendSystemToolAdditions）。
+                let text = if msg_index == 0 {
+                    crate::utils::text::get_system_message_text(system)
+                } else {
+                    crate::utils::text::render_system_message_update(system)
+                };
+                if !text.is_empty() {
+                    items.push(json!({
+                        "role": instruction_role,
+                        "content": crate::utils::sanitize_unicode::sanitize_surrogates(&text)
+                    }));
+                }
+            }
             crate::types::Message::User(u) => match &u.content {
                 crate::types::UserContent::Text(t) => {
                     items.push(json!({
