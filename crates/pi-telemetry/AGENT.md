@@ -37,7 +37,7 @@ vendor 中立的 telemetry 契约与类型化 schema 工具，是 `pi-ai` 与 `p
 
 ## 复刻过程中的变化
 
-1. **类型体操简化**：TS 的 `TypedSpanStarter`、`Infer*`、`ExactTelemetryAttributes`、`SchemaTelemetrySpan` 等是纯编译期类型（conditional types / infer / union-to-intersection），Rust 无法表达。`create_typed_span_starter` 退化为泛型 `TypedSpanStarter<C>`，运行时行为一致；schema 定义类型保留为数据（见 `lib.rs` 注释）。
+1. **类型体操简化**：TS 的 `TypedSpanStarter`、`Infer*`、`ExactTelemetryAttributes`、`SchemaTelemetrySpan` 等是纯编译期类型（conditional types / infer / union-to-intersection），Rust 无法表达。`create_typed_span_starter` 退化为泛型 `TypedSpanStarter<C>`，运行时行为一致；schema 定义类型保留为数据（见 `lib.rs` 注释）。对应 2026-10-01 扫描报告中 `packages/telemetry` 的 12 项 MISSING，属**已核实豁免**（见根 `todos.md` 的 C 类说明）。
 2. **dyn 兼容性拆分**：TS 中 `TelemetrySpan extends TelemetryContext`（span 继承泛型 `startSpan`）。Rust 的 trait 对象不能有泛型方法，因此 `TelemetrySpan` 独立出来，递归启动拆为类型擦除的 `start_child_span`（返回值 `Box<dyn Any>` 擦除）。这是本模块唯一的实质结构变化。
 3. **3 个 passivity case 省略**：`conformance.ts` 里 3 个依赖 JS `Proxy`（构造「属性读取时抛错」对象）的 case，Rust 静态类型下无对应物，在文件头注释说明。
 4. **错误传播用 panic**：TS 的 `throw`/`Promise.reject` 对应 Rust panic，通过 `catch_unwind` 捕获并 settle 为 error 后 `resume_unwind` 继续传播。

@@ -1,64 +1,74 @@
 # 上游同步基线（Pi）
 
-> 用途：记录 pi_rs 与上游 Pi 的同步位置，避免进度丢失。
-> **每次同步后请更新本文件。**
+> 用途：记录 pi_rs 与上游 Pi 的**当前同步状态**——跟到哪个版本、复刻到什么程度、还差什么。
+> 单次同步批次的过程记录（P1–P7 之类的步骤、commit 链、逐条改动）不在本文件维护。
 
 ## 当前状态
 
-- **已同步到上游 tag**：`v0.99.2`（2026-09-30）
+- **已同步基线**：上游 tag `v0.99.2`（commit `005af57d8`，2026-09-30）
 - **同步日期**：2026-10-01
-- **本次同步范围**：`f3564a1d..v0.99.2`（312 个 commit / 12 个 tag），按 `UPSTREAM-SYNC-v0.99.2.md` 的 P1–P7 分阶段移植
-- **本地提交链**：`d07a2ab`(P1) → `bce7b0b`(P2) → `e3c01c4`(P3a) → `080a062`(P3b) → P4/P5 提交
-- **已知偏差（本次未同步）**：
-  - `onProviderStreamEvent`（0.99.0）未实现 —— 需穿透 provider 流层（`StreamOptions` + 各 provider 的事件解析处），属独立改动
-  - overflow 的 Z.AI CN 端点检测（可选，本项目未使用 Z.AI）
-  - HTTP-date 形式的 `Retry-After` 仍为简化实现（上游用 `Date.parse`，Rust 侧忽略该 header 走指数退避）
+- **覆盖包**：`packages/{agent,ai,telemetry}`（忽略 `coding-agent` / `tui` / `protocol` 等产品层）
 
-### 上一轮（历史）
+### 复刻程度
 
-- **曾同步到**：`f3564a1d`（= `v0.85.1-35-gf3564a1d4`），2026-09-10，本地提交 `9cdb3b5`
-  - fork 重构 / JSONL 两阶段流式 fork / retry 退避上限 / `open_text_line_reader`
-  - 另有 harness fault 路径修复（`af4136f`）
+- **`packages/agent` → `crates/pi-agent`**：91 个非测试 TS 文件中 **83 个已配对**；9 个未对应
+  （8 个 `session/testing/*` 测试基建 + `jsonl/legacy-v3.ts`，后者明确不复刻）。
+  符号级 139 项 MISSING 已人工分档，绝大多数是类型层 / 语言适配。
+- **`packages/ai` → `crates/pi-ai`**：按「provider 不必全做，但要有 openai 和 deepseek」翻译
+  **核心子集（44/178 文件）**；107 项 MISSING 绝大多数属声明范围外。范围详见 `crates/pi-ai/AGENT.md`。
+- **`packages/telemetry` → `crates/pi-telemetry`**：文件级 6/6 配对；12 项 MISSING 全为
+  TypeScript 类型级编程（条件 / 映射类型），Rust 无对应物，运行时行为一致。
 
-## 待同步（已识别，尚未移植）
+### 当前差异（未搬项）
 
-- **同步目标（tag 锚点）**：`v0.99.2`（2026-09-30，最新稳定 tag）
-- **上游 main HEAD（仅供参考）**：`8ce69e9d2`（= `v0.99.2` + 17 个未发版 commit）
-- **当前基线**：`f3564a1d` = `v0.85.1-35-gf3564a1d4`（即 v0.85.1 之后 35 个 commit，**未发版的中间状态**）
-- **待同步范围**：`f3564a1d..v0.99.2` — **312 个 commit**，跨 **12 个 tag**（2026-09-05 → 2026-09-30）
-- **改动规模**：`packages/agent` 95 文件 +34,840/-382（含实验性 pico3 8,074 行）；`packages/ai` 240 文件 +12,296/-4,887；`packages/telemetry` 2 文件 +17/-3
-- **主代码（排除 pico3）**：agent 侧仅 9 文件 +383/-174
+分两类，**逐项详情、行数、估算与判定依据见 `todos.md`**：
 
-### 进度
+- **B 类**（平台 / 测试 / 迁移，非 runtime 产品逻辑）：B1 Node 环境适配、B2 一致性测试套件、
+  B3 legacy-v3 JSONL 迁移。
+- **C 类**（类型层 / API 形态，**无运行时行为**或已核实等价）：C1 工具入参类型、C2 telemetry span
+  类型层、C3 session 具名错误、C4 `HarnessFault`/`HarnessClosed` 变体、C5 conformance 空实现。
 
-- ✅ **P1 消息模型扩展**（2026-10-01 完成）：`Message::System` / `SystemMessage` / `SystemContent` / `ToolReference`；`AgentMessage::System`；text 渲染函数；estimate / transform_messages / 两个 provider 的 system 分支；新增 8 个测试
-- ⬜ P2 transcript 工具层（`utils/transcript.rs` + `normalizeContext`）
-- ✅ **P2 transcript 工具层**（2026-10-01 完成）：新增 `utils/transcript.rs`（17 个导出）+ `TranscriptContext` 类型 + `sections` 改为 `IndexMap`（保插入序）；新增 10 个测试。**stream 入口切换与 provider 消费并入 P3**。
-- ✅ **P3a provider 侧接入 transcript**（2026-10-01 完成）：`openai-responses` / `openai-completions` 改为 `normalize_context` → `resolve_transcript` → `resolve_transcript_tools`；删除内联 `split_deferred_tools`，新增 `append_system_tool_additions`（非首条 system 的 `toolsAdded` → `additional_tools` / `tool_search`）；completions 引入 `instructionRole` 与 Kimi 风格 `system+tools`；`namespace` 回放改为只看 `is_same_model`（对齐上游）；`Compat` 新增 `supportsMidConvoSystemMessages`。3 个新测试。
-- ✅ **P3b agent-loop 侧**（2026-10-01 完成）：`agent-loop.rs` 新增 `declare_tool_changes`（把可执行工具集与 transcript 声明之差写成 system 消息的 `toolsAdded`/`toolsRemoved`）+ `with_tool_changes` / `declared_tools` / `executable_tools`；`fold_initial_system_message` 把 `systemPrompt`+`tools` 折叠为首条 system 消息（字段清空）；在 `run_agent_loop` 入口与 `run_loop` 每轮 pending 注入前接入。`drive/tool-placement.rs` 移除 `activeToolNames` 自动增量写回与 `ConfigUpdate::ActiveTools` 事件（工具激活改为显式：`setActiveTools` / 调用方更新工具集，装载变化由 transcript 承载）。7 个新测试。
-- ✅ **P4 循环钩子 Breaking**（2026-10-01 完成）：新增 `finishTurn`（返回 `AgentTurnDecision::End|Continue`，在 assistant+工具结果 finalize 后、`turn_end` 前运行，决策在 `turn_end` 后应用）取代 `shouldStopAfterTurn`；新增 `prepareRequest`（每次 provider 请求前，含首次，可替换 context/model/thinkingLevel）；新增 `Agent.peekQueuedMessages()`；`AgentTurnContext` 取代 `ShouldStopAfterTurnContext`（旧名保留为别名）。2 个新集成测试。
-- ✅ **P5 小项**（2026-10-01 完成）：`AssistantMessage.thinkingLevel`（25 处构造点补齐，agent-loop 两处填充）；image 检测改为 `GIF87a`/`GIF89a`（避免文本文件误判）；provider-retry 对非有限 `Retry-After` 回落指数退避。**未做**：`onProviderStreamEvent`（需穿透 provider 流层，独立改动）、overflow Z.AI CN 检测（可选）。
-- ✅ **P6 telemetry**（2026-10-01 确认无需代码改动）：上游仅改 CHANGELOG 与 package.json 版本号，源码零改动。
-- ✅ **P7 验证与收尾**（2026-10-01 完成）：`cargo check` / `clippy`（0 告警）/ `test`（21 套件全绿）/ `fmt` 全部通过；AGENT.md 与方案文档已同步。
-### 待同步清单（按优先级）
+### 上游已知偏差（未同步的能力）
 
-1. **〔重大〕Mid-conversation system messages**（commit `9e05370b2`，PR #9548）
-   - 新增 `SystemMessage`（`role:"system"` + `content` + `sections` + **`toolsAdded`** + **`toolsRemoved`** + `timestamp`），位于 `packages/ai/src/types.ts`
-   - 新增 `packages/ai/src/utils/transcript.ts`（`createInitialSystemMessage` 等，234 行）
-   - **删除 `packages/ai/src/utils/deferred-tools.ts`**（工具增量激活改由 system message 承载）
-   - agent 侧：`harness/messages.ts` 的 `convertToLlm` 新增 `case "system"`；`drive/tool-placement.ts` 移除 `activeToolNames` 增量写入（-44 行）
-   - 影响 pi_rs：`pi-ai/types.rs`（Message 枚举）、`harness/messages.rs`（convert_to_llm）、`drive/tool-placement.rs`、`api/openai-responses.rs`（内联的 split_deferred_tools）、会话恢复/分支导航
-2. **〔Breaking〕Agent 循环钩子变更**（0.86.0 / 0.87.0）
-   - 移除 `shouldStopAfterTurn` → 新增 **`finishTurn`**（返回 `{action:"end"|"continue"}`，在 assistant/tool 结果 finalize 后、`turn_end` 前运行）
-   - 新增 **`prepareRequest`**（每次 provider 请求前，含首次）
-   - 新增 **`Agent.peekQueuedMessages()`**
-   - `prepareNextTurn` / `prepareNextTurnWithContext` 语义调整（仅在确定开始下一 assistant turn 时运行）
-   - 影响：`agent-loop.rs`、`agent.rs`、`types.rs`
-3. **〔新增〕** `onProviderStreamEvent`（0.99.0）；assistant message 记录 `thinkingLevel`（0.99.0）
-4. **〔修复〕** `harness/tools/image.ts`：以 `GIF` 开头的文本文件被误判为图片；`utils/provider-retry.ts`：`Retry-After` 不可解析时改用指数退避；`utils/overflow.ts`：Z.AI CN 端点溢出检测
-5. **〔范围外，暂不搬〕** ai 的图像模型统一（`ImagesModels` 移除）、classifier 模型与 `Models.classify()`、模型目录新增（Claude Sonnet 5.5 / GPT-6.1 Sol / Grok 4.7 等）、OAuth 页面移至 `utils/oauth-page.ts`、Sign in with ChatGPT
-6. **〔实验性，建议观察〕** `packages/agent/src/harness/pico3/`（25 文件 / 8,074 行）—— 明确标注 "Experimental Pico3 kernel API"，未进包根导出；`docs/pico-v3.md` 称 "Design under discussion"。待其稳定后再评估是否纳入复刻范围。
-7. **〔小〕** `packages/telemetry` 2 文件 +17/-3
+1. `onProviderStreamEvent`（0.99.0）—— 需穿透 provider 流层（`StreamOptions` + 各 provider 事件解析点）
+2. overflow 的 Z.AI CN 端点检测 —— 本项目未接入 Z.AI
+3. HTTP-date 形式的 `Retry-After` —— Rust 侧忽略该 header 走指数退避（上游用 `Date.parse`）
+
+### 对比报告
+
+全量方法级对比产出 `UPSTREAM-PARITY.md`（机械扫描 + 人工复核结论），可重跑：
+
+```bash
+python3 tools.d/.parity/scan.py
+```
+
+## 未完成清单（backlog）
+
+> 概要如下；**逐项详情见 `todos.md`**（B 类 = 平台/测试/迁移，C 类 = 类型层/API 形态）。
+> 「明确要求不复刻」的项目在 B3 中单列，不再跟踪。
+
+### B 类 —— 平台 / 测试 / 迁移
+
+| # | 模块 | 原版路径 | 性质 |
+|---|------|----------|------|
+| B1 | Node 环境适配 | `harness/env/nodejs.ts` | Node 平台细节（findBashOnPath / WSL bash 检测 / killProcessTree），`std::process` 已等价覆盖 |
+| B2 | 会话一致性测试套件 | `session/testing/conformance/*` + `benchmark/*` + `gating-storage.ts` + `storage-decorator.ts` + `instrumented-storage.ts` | 测试基建（约 2,275 行），验证 storage/repo 契约 |
+| B3 | 旧版 JSONL 迁移 | `session/jsonl/legacy-v3.ts` | **用户已明确要求不复刻**；Rust `V3Legacy` 分支显式返回 Err |
+
+### C 类 —— 类型层 / API 形态（2026-10-01 全量对比新增）
+
+| # | 项 | 影响 | 估算 | 建议 |
+|---|----|------|------|------|
+| C1 | 工具入参类型 `BashToolInput` / `EditToolInput` / `ReadToolInput` / `WriteToolInput` | 无运行时差异，仅缺 API 形态与编译期类型安全 | 小 | 可补 |
+| C2 | `harness/telemetry.ts` 的 16 个 span 类型 | 无运行时行为，纯类型层 | 小–中 | 可补 |
+| C3 | session 4 个具名错误类型 | 已核实：消息逐字对齐、上游无 `instanceof` 分支 → 无行为差异 | 大 | 不建议 |
+| C4 | `HarnessFault` / `HarnessClosed` 错误变体 | 已核实：唯一消费点在 lane 层且已对齐 → 无行为差异 | 小 | 不建议 |
+| C5 | `session/testing/conformance` 空实现 | 无运行时；决定 storage 契约回归能力 | 中–大 | 见 B2 |
+
+已核实豁免（不再跟踪）：`jsonl` legacy-v3 相关方法、`events.ts` 三方法（行为等价）、
+`jsonl/storage.ts` 私有方法（已内联）、`result.ts` 的 13 个错误类（`tagged_error!` 宏生成）、
+`Result`/`ok`/`err`（用标准库）、`session/types.ts` 的 16 个 `*Operation`（enum variants）、
+`pi-telemetry` 12 项类型级编程、`pi-ai` 107 项中的范围外部分。
 
 ## 上游源码镜像（只读参考，已 gitignore）
 
@@ -71,11 +81,11 @@ tools.d/upstream-ref/
 ```
 
 > ⚠️ 镜像**只含某个时间点的源码快照，不含 git 历史** —— 不能用它做版本间 diff。
-> 现已在项目根目录维护**完整 clone**：`./upstream/`（见下节）；镜像仅保留作快速检索，可择机删除。
+> 项目根目录另有**完整 clone**：`./upstream/`（见下节）；镜像仅保留作快速检索，可择机删除。
 
 ## 同步策略（以 tag 为锚点）
 
-上游有 **322 个 tag**，命名 `v<semver>`（如 `v0.99.2`），**monorepo 统一版本**（v0.99.2 时 `packages/{agent,ai,telemetry}` 版本号一致）。
+上游有 **322 个 tag**，命名 `v<semver>`（如 `v0.99.2`），**monorepo 统一版本**（`packages/{agent,ai,telemetry}` 版本号一致）。
 没有 LTS / 稳定分支，只有 `main` + 大量 feature 分支。
 
 **结论：用 tag 当锚点，但不要每个 tag 都跟。**
@@ -89,12 +99,12 @@ tools.d/upstream-ref/
    - 需要上游的新能力（如 mid-conversation system messages）
    - 累积 ≥ 3 个 tag 或 ≥ 2 周
 3. **只跟 `packages/{agent,ai,telemetry}`**，忽略 `coding-agent` / `tui` / `protocol` 等产品层
-4. 每次同步后更新本文档的「当前状态」与「待同步」
+4. 每次同步后更新本文件的「当前状态」
 
 ## 上游仓库（项目内工作副本）
 
 - 地址：`https://github.com/earendil-works/pi`
-- **本地工作副本**：`./upstream/`（仓库根目录内，已加入 `.gitignore`；含完整历史，不再依赖 `/tmp`）
+- **本地工作副本**：`./upstream/`（仓库根目录内，已加入 `.gitignore`；含完整历史，不依赖 `/tmp`）
 - **当前检出**：`v0.99.2`（detached HEAD，HEAD = `005af57d8 Release v0.99.2`）
 - 更新与切版本：
 
@@ -112,4 +122,4 @@ git diff <基线tag> <目标tag> # 版本间差异
 3. 先读 `packages/{agent,ai}/CHANGELOG.md` 的 **Breaking Changes**（最高优先级）
 4. 按 `packages/{agent,ai,telemetry}` 过滤代码改动（忽略测试/文档/生成文件）
 5. 逐项移植到 Rust，提交信息注明同步到的 tag 与 commit
-6. **更新本文件的「当前状态」**
+6. 更新本文件「当前状态」+ 重跑 `tools.d/.parity/scan.py` 刷新对比报告

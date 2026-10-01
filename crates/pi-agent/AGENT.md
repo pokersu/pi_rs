@@ -4,7 +4,7 @@ agent 运行时核心：`Agent` 类 + 双层循环 + 工具执行管线 + 消息
 
 ## 复刻来源
 
-1:1 复刻自 [earendil-works/pi](https://github.com/earendil-works/pi) 的 `packages/agent`，90 个 TS 文件中 89 个已对应（Rust 89 文件，多出的 `mod.rs` 是 Rust 的模块声明与 re-export 惯例；唯一未对应的是 B 类 legacy-v3 迁移等，见根 `todos.md`）：
+1:1 复刻自 [earendil-works/pi](https://github.com/earendil-works/pi) 的 `packages/agent`，91 个非测试 TS 文件中 83 个已配对（Rust 侧另有若干 `mod.rs` 模块声明，属 Rust 惯例）。剩余 9 个未对应文件集中在 **B 类**：`session/testing/*` 8 个（测试基建）+ `jsonl/legacy-v3.ts`（明确不复刻）；完整台账见根 `todos.md`：
 
 | 原 TS 目录/文件 | Rust 对应 |
 |---|---|
@@ -58,11 +58,14 @@ agent 运行时核心：`Agent` 类 + 双层循环 + 工具执行管线 + 消息
 11. **`values` 地址强类型化**：`branch_tip`/`lane_config`/`operation_result` 等地址函数返回 `Value<具体类型>`（对齐原版 `values.ts`）；`getValue<T>` 因 Rust `dyn` trait 不支持泛型方法无法复刻，读路径以 `.erased()` 显式擦除类型。
 12. **fork 重构（对齐上游 2026-09 fork 系列 commit）**：`fork-policy.rs` 由旧 `ForkScope`/`ForkDisposition`/`classify_fork_address` 改为 `ForkCurrentStatePlan`（Branch{ branch, destination_tip }/Tree）+ `select_branch_fork`/`project_fork_current_state_write`；内存后端 `create_fork`（InMemoryStorageState.select_fork_plan）与 JSONL 后端两阶段流式 `run_jsonl_fork`（新增 `jsonl/fork.rs` + `jsonl/io.rs`，先索引后投影，`publish_jsonl` 原子发布）均对齐原版；`legacy-v3` 迁移未复刻（fork 开放/关闭 v3 源与 `JsonlStorage.open` v3 分支均显式返回 Err）。retry 侧同步 `RetryPolicy.max_agent_delay_ms` 上限（`retry_delay_ms` 指数退避 cap）。
 13. **system 消息（对齐 v0.99.2）**：`AgentMessage` 新增 `System` 变体；`convert_to_llm` 对 system 与其他可转换消息一样**原样透传**（对齐上游 `case "system"`）。压缩侧对齐上游的「未列 system」语义：`estimate_tokens` 对 system 返回 0（不参与压缩预算）、`is_valid_cut_point` 不把 system 作为切点、`serialize_conversation` 不把 system 纳入摘要文本。
-14. **工具装载变化改由 system 消息承载（对齐 v0.99.2 P3b）**：`agent-loop.rs` 新增 `declare_tool_changes`（对应上游 `declareToolChanges`）——`context.tools` 是运行时**可执行**工具集，transcript 的 system 消息声明模型**可用**工具；每轮请求前两者之差写成 system 消息上的 `toolsAdded`/`toolsRemoved`，保证「重放 transcript 后恰好等于可执行集」的不变式。另有 `with_tool_changes`（复制并替换工具字段，空列表省略）、`declared_tools`（从 AgentMessage 列表抽 system 消息后用 `get_current_tools` 求当前声明）、`executable_tools`（`AgentTool` → LLM 层 `Tool`）。
+14. **工具装载变化改由 system 消息承载（对齐 v0.99.2）**：`agent-loop.rs` 新增 `declare_tool_changes`（对应上游 `declareToolChanges`）——`context.tools` 是运行时**可执行**工具集，transcript 的 system 消息声明模型**可用**工具；每轮请求前两者之差写成 system 消息上的 `toolsAdded`/`toolsRemoved`，保证「重放 transcript 后恰好等于可执行集」的不变式。另有 `with_tool_changes`（复制并替换工具字段，空列表省略）、`declared_tools`（从 AgentMessage 列表抽 system 消息后用 `get_current_tools` 求当前声明）、`executable_tools`（`AgentTool` → LLM 层 `Tool`）。
     - `fold_initial_system_message`：把 `context.system_prompt` + `tools` 折叠成**首条 system 消息**（对应上游在 agent 层表达的 `createInitialSystemMessage` + `normalizeContext`），折叠后 `system_prompt` 置空，避免 provider 侧重复生成首条 system 消息。接入点：`run_agent_loop` 入口（折叠）与 `run_loop` 每轮 pending 注入前（声明）。
     - `runtime/drive/tool-placement.rs`：**移除** `addedToolNames` → `activeToolNames` 的自动增量写回与对应 `ConfigUpdate::ActiveTools` 事件（对齐上游：工具激活改为显式——由 `setActiveTools` 或调用方更新工具集；装载变化由 transcript 承载）。同时删除了不再使用的 `next_config_contains` 与该 lane patch 中的 configuration 改写。
-15. **循环钩子 Breaking（对齐 v0.99.2 P4）**：删除 `shouldStopAfterTurn`，改为 `finishTurn`（返回 `AgentTurnDecision::End | Continue`）——在 assistant 与全部工具结果 finalize 后、`turn_end` **之前**运行，决策在 `turn_end` **之后**应用（`End` 结束正常 run 且不动 steering/follow-up 队列；`Continue` 确保再进行一次 provider 请求；error/aborted 仍为硬退出，不会走到该回调）。新增 `prepareRequest`（每次 provider 请求前运行，含首次；可替换 context/model/thinkingLevel，且不轮询队列）与 `Agent.peekQueuedMessages()`（预览下一轮队列消息，steering 优先、为空则 follow-up）。`ShouldStopAfterTurnContext` 更名为 `AgentTurnContext`（旧名保留为类型别名）；`AgentRequestUpdate` 的 `thinking_level` 用 `Option<ThinkingLevel>`（`None` = 不更新，可表达 `off`），`PrepareRequestContext.thinking_level` 与 `stream.reasoning` 一致。
-16. **小项同步（对齐 v0.99.2 P5）**：`AssistantMessage` 新增 `thinking_level`（agent-loop 在流结果上填入 `config.stream.reasoning`，对应上游 `Object.assign(result, { thinkingLevel })`）；图片检测改为 `GIF87a` / `GIF89a`（避免以 `GIF` 开头的文本文件被误判）；`provider-retry` 对非有限的 `Retry-After` 值回落到指数退避。**未同步**：`onProviderStreamEvent`（需穿透 provider 流层）、overflow 的 Z.AI CN 检测（本项目未用该 provider）。
+15. **循环钩子 Breaking（对齐 v0.99.2）**：删除 `shouldStopAfterTurn`，改为 `finishTurn`（返回 `AgentTurnDecision::End | Continue`）——在 assistant 与全部工具结果 finalize 后、`turn_end` **之前**运行，决策在 `turn_end` **之后**应用（`End` 结束正常 run 且不动 steering/follow-up 队列；`Continue` 确保再进行一次 provider 请求；error/aborted 仍为硬退出，不会走到该回调）。新增 `prepareRequest`（每次 provider 请求前运行，含首次；可替换 context/model/thinkingLevel，且不轮询队列）与 `Agent.peekQueuedMessages()`（预览下一轮队列消息，steering 优先、为空则 follow-up）。`ShouldStopAfterTurnContext` 更名为 `AgentTurnContext`（旧名保留为类型别名）；`AgentRequestUpdate` 的 `thinking_level` 用 `Option<ThinkingLevel>`（`None` = 不更新，可表达 `off`），`PrepareRequestContext.thinking_level` 与 `stream.reasoning` 一致。
+16. **小项同步（对齐 v0.99.2）**：`AssistantMessage` 新增 `thinking_level`（agent-loop 在流结果上填入 `config.stream.reasoning`，对应上游 `Object.assign(result, { thinkingLevel })`）；图片检测改为 `GIF87a` / `GIF89a`（避免以 `GIF` 开头的文本文件被误判）；`provider-retry` 对非有限的 `Retry-After` 值回落到指数退避。**未同步**：`onProviderStreamEvent`（需穿透 provider 流层）、overflow 的 Z.AI CN 检测（本项目未用该 provider）。
+17. **与上游的对齐状态**：工具执行层与会话层已对照上游逐项核实，并修复 9 处不匹配；
+    其中 `isError` 曾是**真实缺陷**（工具抛错被上报为成功），已由 `ExecutedToolCallOutcome` 贯通修复。
+    尚未对齐的项（工具入参类型、telemetry span 类型层、session 具名错误等）见根 `todos.md` 的 C 类。
 
 ## 阅读步骤
 
