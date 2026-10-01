@@ -66,19 +66,6 @@ python3 tools.d/.parity/scan.py
 > 扫描报告中其余大量 MISSING 属机械假阳性（宏生成 / 语言替换 / 类型合并 / 命名适配 / 内联实现 /
 > 范围外 provider），逐类说明见 `UPSTREAM-PARITY.md` 文末「人工复核结论」。（已对齐项不再列出。）
 
-## 上游源码镜像（只读参考，已 gitignore）
-
-```
-tools.d/upstream-ref/
-  agent-src/      ← packages/agent/src（92 个 TS）
-  ai-src/         ← packages/ai/src（179 个 TS）
-  telemetry-src/  ← packages/telemetry/src（6 个 TS）
-  docs/           ← Pi 官方文档（69 个 md，含 agent/harness.md 规范）
-```
-
-> ⚠️ 镜像**只含某个时间点的源码快照，不含 git 历史** —— 不能用它做版本间 diff。
-> 项目根目录另有**完整 clone**：`./upstream/`（见下节）；镜像仅保留作快速检索，可择机删除。
-
 ## 同步策略（以 tag 为锚点）
 
 上游有 **322 个 tag**，命名 `v<semver>`（如 `v0.99.2`），**monorepo 统一版本**（`packages/{agent,ai,telemetry}` 版本号一致）。
