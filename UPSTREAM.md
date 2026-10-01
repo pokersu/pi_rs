@@ -71,7 +71,7 @@ tools.d/upstream-ref/
 ```
 
 > ⚠️ 镜像**只含某个时间点的源码快照，不含 git 历史** —— 不能用它做版本间 diff。
-> 要看新改动必须重新克隆上游仓库。
+> 现已在项目根目录维护**完整 clone**：`./upstream/`（见下节）；镜像仅保留作快速检索，可择机删除。
 
 ## 同步策略（以 tag 为锚点）
 
@@ -91,16 +91,24 @@ tools.d/upstream-ref/
 3. **只跟 `packages/{agent,ai,telemetry}`**，忽略 `coding-agent` / `tui` / `protocol` 等产品层
 4. 每次同步后更新本文档的「当前状态」与「待同步」
 
-## 上游仓库
+## 上游仓库（项目内工作副本）
 
 - 地址：`https://github.com/earendil-works/pi`
-- 本地工作副本约定：`/tmp/pi-upstream`（临时目录，**可能被系统清理**，需要时重新克隆）
-- 取目标版本：`git checkout v0.99.2`（或直接 `git diff <基线> v0.99.2`）
+- **本地工作副本**：`./upstream/`（仓库根目录内，已加入 `.gitignore`；含完整历史，不再依赖 `/tmp`）
+- **当前检出**：`v0.99.2`（detached HEAD，HEAD = `005af57d8 Release v0.99.2`）
+- 更新与切版本：
+
+```bash
+cd upstream
+git fetch --tags --prune
+git checkout <目标tag>      # 例如 git checkout v0.99.2
+git diff <基线tag> <目标tag> # 版本间差异
+```
 
 ## 同步流程（约定）
 
-1. 克隆/更新上游到 `/tmp/pi-upstream`
-2. 确定目标 tag，`git log --oneline <基线>..<目标tag>` 取 commit 列表
+1. 更新上游：`cd upstream && git fetch --tags --prune`
+2. 确定目标 tag，`git log --oneline <基线tag>..<目标tag>` 取 commit 列表
 3. 先读 `packages/{agent,ai}/CHANGELOG.md` 的 **Breaking Changes**（最高优先级）
 4. 按 `packages/{agent,ai,telemetry}` 过滤代码改动（忽略测试/文档/生成文件）
 5. 逐项移植到 Rust，提交信息注明同步到的 tag 与 commit
