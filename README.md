@@ -33,7 +33,7 @@ cargo fmt --all -- --check  # 格式检查
 
 ## 复刻范围与差异
 
-- **pi-telemetry**、**pi-agent**：文件级 1:1 复刻。方法级差异仅为 Rust 语言固有限制（类型体操、`AsyncIterable` → `Vec`、`getValue<T>` 泛型方法因 `dyn` trait 无法复刻）。产品逻辑无缺失；未搬项集中在 **B 类**（Node 平台细节、conformance/基准测试基建、legacy-v3 迁移）与 **C 类**（工具入参类型、telemetry span 类型层等无运行时行为的类型/API 形态差异），逐项台账与工作量见 `todos.md`，完整扫描报告见 `UPSTREAM-PARITY.md`。
+- **pi-telemetry**、**pi-agent**：文件级 1:1 复刻。方法级差异仅为 Rust 语言固有限制（类型体操、`AsyncIterable` → `Vec`、`getValue<T>` 泛型方法因 `dyn` trait 无法复刻）。产品逻辑无缺失；**仍未搬的项**为 B 类（Node 平台细节、conformance/基准测试基建、legacy-v3 迁移）与 C 类（telemetry span 类型层、session 具名错误等无运行时行为的类型/API 形态差异），逐项台账见 `todos.md`，完整扫描报告见 `UPSTREAM-PARITY.md`。
 - **pi-ai**：按「provider 不需要实现所有，但要有 openai 和 deepseek」的要求翻译核心子集（44/178 文件）。省略 40+ provider 的 HTTP 实现、OAuth 登录流程、图像生成、模型目录等。
 
 各模块的完整差异清单见对应 `AGENT.md`。

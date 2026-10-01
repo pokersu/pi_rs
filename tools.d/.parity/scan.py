@@ -36,149 +36,48 @@ RESERVED_TS = {
 }
 
 REVIEW_SECTION = """
-
 ---
 
-# 本轮修复记录（2026-10-01，全量逻辑对齐）
+# 人工复核结论
 
-以下 8 项已逐个对照上游源码核实并修复，`cargo check/clippy/test/fmt` 全绿：
+> 上方是机械扫描结果。本节的职责只有两件事：**(1) 说明哪些 MISSING 是假阳性，(2) 列出仍未对齐的项**。
+> 已对齐项的改动明细见 git 历史，此处不再保留。
 
-1. **`AgentToolResult.isError` 传递丢失（逻辑 bug）**：`execute_prepared_tool_call` 原返回
-   `AgentToolResult`，`finalize_executed_tool_call` 硬编码 `is_error = false`，导致工具抛错/panic 时
-   `ToolResultMessage.isError` 仍为 false（模型会当成成功）。现新增 `ExecutedToolCallOutcome{result,is_error}`，
-   对齐上游 `ExecutedToolCallOutcome`；`create_error_tool_result` 置 `is_error: true`。
-2. **`AgentToolResult` 缺字段**：补 `structured_content`（对应 `structuredContent`）与 `is_error`
-   （对应 `isError`），26 处构造点同步。
-3. **`finalizeExecutedToolCall` 缺 `structuredContent` 联动**：上游「钩子只换 content 时丢弃旧
-   structuredContent」的语义已补齐；`AfterToolCallResult` 同步补 `structured_content`。
-4. **`tool_execution_update.partialResult` 降级**：原只传 `partial.details`（JSON），现改为完整
-   `AgentToolResult`（对齐上游 `partialResult: any` 实际值）。
-5. **`runToolCall` 公开入口缺失**：新增 `run_tool_call` / `RunToolCallOptions` / `ToolCallHooks` /
-   `ToolUpdateSink` / `AgentToolCallOutcome`，并把 `prepare_tool_call`、`finalize_executed_tool_call`
-   从 `&AgentLoopConfig` 解耦为 `&ToolCallHooks`（对齐上游签名）。已导出。
-6. **`jsonl/storage.ts` torn 处理**：原用普通 `write_file`，改为 `publish_file_atomically`（上游实测
-   原子发布，失败不再静默）。同时错误不再被丢弃。
-7. **`session.ts` `SessionInvalidBranchError` 消息缺包装**：补齐上游
-   `Invalid branch ${JSON.stringify(case)}: ${reason}` 外层格式。
-8. **工具 `details` 丢失**：`bash` 现返回 `BashToolDetails{truncation,fullOutputPath}` 并补三种截断提示
-   （含 `lastLinePartial` / `truncatedBy` 分支、`timeout`/`aborted` 错误文案、退出码消息顺序）；`read` 现返回
-   `ReadToolDetails{truncation}`。`TruncationResult` 补 `Serialize`（camelCase）。
+## 一、机械扫描的已知假阳性（非遗漏）
 
-## 仍属“适配”而非缺口的项（本轮再次核实）
+以下类别扫描器会报 MISSING，但 Rust 侧已有等价实现：
 
-- **session 具名错误类型**：上游 4 个错误类（InvalidBranch/BranchExists/PendingAssistant/UnknownTarget）
-  Rust 用 `Result<_, String>` 承载，**消息文本已逐字对齐**；上游自身无任何 `instanceof` 分支（已 grep 确认），
-  故无行为差异，仅缺静态类型粒度。
-- **`HarnessFault` / `HarnessClosed`**：lane 侧 `faulted` 语义已对齐（见上）；harness 对外仍统一
-  `HarnessError::Closed`，上游唯一消费处（`lane.ts` 的 `instanceof HarnessFault`）已在 lane 层消化。
-- **`events.ts` 三方法**：`enqueueBarrier` → Rust `delivery_tail` 互斥锁（`install_watcher` 内），
-  `setUnsubscribe` → `unsubscribe_callback` + `watch_listeners` 重筛，`watchFromSnapshot` → `watch<T>()`。
-  三者行为已逐一核对等价。
-- **`jsonl/storage.ts` 私有方法**：`applyCommit` / `replayCommitted` 已在 `storage.rs::open`/`commit` 内联
-  （validate→apply 两阶段完整）；`withImportedUsage` / `isLegacyV3` / `openLegacyV3` / `upgradeLegacyV3ToV4`
-  属 legacy-v3（**用户已明确豁免**）。
-- **`AgentToolResult.addedToolNames`**：Rust 有而上游 `AgentToolResult` 没有（上游在别处承载），非缺口。
+- **宏生成**：`harness/result.ts` 的 13 个错误类由 `result.rs` 的 `tagged_error!` 宏生成。
+- **语言替换**：TS 的 `Result`/`ok`/`err` → Rust 标准库 `Result`；`utf8ByteLength` → `str::len()`。
+- **类型合并**：`session/types.ts` 的 16 个 `*Operation` 接口 → `OperationState` enum variants。
+- **类型级编程**：`pi-telemetry` 的 12 项（条件 / 映射类型 / `UnionToIntersection`）与
+  `harness/telemetry.ts` 的 16 个 span 类型（`TelemetrySchemaSpanName<typeof SCHEMA>` 推导）
+  —— Rust 无对应能力，运行时行为一致（`start_ai_span` / `start_harness_span` / 两个 `*_SCHEMA` 都在）。
+- **命名适配**：`restoreSession`→`restore_session_arc`、`captureLaneSnapshot`→`capture_lane_snapshot_inner`、
+  `setConfiguration`→`set_configuration_identity`、`requestOperationAbort`→`request_abort`、
+  `operationScopeOf`→`OperationState::scope()` 等。
+- **内联实现**：第 3 节的私有函数档多属此类（如 prompt-templates 的 3 个加载函数内联进
+  `load_prompt_templates`、skills 的 `loadSkillsFromDirInternal`→`load_skills_from_dir_inner`）。
+- **范围外**：`pi-ai` 107 项中的绝大多数（Classifier / Images / 各厂商 Compat / Routing）。
 
-## 未处理（完整台账见 `todos.md`；概要见 `UPSTREAM.md`「未完成清单」）
+## 二、仍未对齐的项
 
-- **C1** 工具入参类型（`BashToolInput` / `EditToolInput` / `ReadToolInput` / `WriteToolInput`）
-  —— 无运行时差异，仅缺 API 形态与编译期类型安全。〔小，可补〕
-- **C2** `harness/telemetry.ts` 的 16 个 span 类型 vs Rust 的常量表 + schema JSON（无运行时行为）。〔小–中，可补〕
-- **C3 / C4** session 具名错误、`HarnessFault` 变体 —— 已核实无行为差异，不建议投入。
-- **B2 / C5** `harness/session/testing/` 下 8 个文件（gating/instrumented/storage-decorator +
-  benchmark×3 + conformance×2）——纯测试基础设施；`conformance` 现有版本仍是「空 case 列表」。〔中–大〕
-- **B1 / B3** 平台与迁移：Node 环境细节（已等价覆盖）、legacy-v3 JSONL（**用户明确不复刻**）。
-- **上游已知偏差**：`onProviderStreamEvent` / Z.AI CN overflow / HTTP-date `Retry-After`。
+详情与工作量见 `todos.md`：
 
----
+- **B1** Node 平台细节（`findBashOnPath` / WSL 检测 / `killProcessTree`）—— `std::process` 已等价覆盖，不搬。
+- **B2 / C5** 一致性测试套件（conformance + benchmark + storage 装饰器，约 2,275 行）—— 测试基建。
+- **B3** legacy-v3 JSONL 迁移 —— **用户明确要求不复刻**。
+- **C2** `harness/telemetry.ts` 的 16 个 span 类型 —— 类型级推导，豁免。
+- **C3** session 4 个具名错误 —— 消息已逐字对齐、上游无 `instanceof` 分支，不建议投入。
+- **上游能力偏差**：`onProviderStreamEvent` / Z.AI CN overflow / HTTP-date `Retry-After`。
 
-# 人工复核结论（方法级 1:1 判定）
+## 三、扫描口径与已知盲区
 
-> 以下为对上方机械扫描结果的逐项核查结论。三档：**豁免**（语言/结构适配，非缺失）、
-> **适配**（能力等价，命名或组织不同）、**缺口**（确认缺失或行为不等价）。
-
-## A. 系统性误报（已确认豁免）
-
-- **A1 `tagged_error!` 宏**：`harness/result.ts` 的 `LaneBusy`/`OperationMismatch`/`NoActiveRun`/
-  `NoActiveOperation`/`NothingToResume`/`NothingToCompact`/`InvalidMessage`/`InvalidNavigation`/
-  `UnknownSkill`/`UnknownTemplate`/`UnknownTarget`/`InvalidLane`/`Closed` 共 13 个错误类，
-  Rust 侧由 `harness/result.rs` 的 `tagged_error!` 宏生成，**全部存在**。机械扫描未展开宏，误报。
-- **A2 `Result` / `ok` / `err`**：`harness/types.ts` 的 `Result<T,E>`（tagged union）+ `ok()`/`err()`
-  构造器，Rust 直接用标准库 `Result` 与 `Ok`/`Err`（`getOrThrow`→`get_or_throw`、
-  `getOrUndefined`→`get_or_undefined` 已 1:1）。**豁免**。
-- **A3 `*Operation` 接口**：`harness/session/types.ts` 的 `StartingOperation`/`CheckpointOperation`/
-  `AssistantReadyOperation`/`ToolsOperation`/`SummaryReadyOperation`/`OperationAt` 等 16 个接口，
-  Rust 对应 `harness/session/types.rs` 的 `OperationState` **enum variants** 与 `OperationState::scope()`。**豁免**。
-- **A4 缩写命名**：`lazyOAuth`↔`lazy_oauth`、`pollOAuthDeviceCodeFlow`↔`poll_oauth_device_code_flow`
-  等已由脚本的 compact 键（去分隔符小写）消除。
-- **A5 pi-telemetry 12 项**：`InferEventAttributes`/`ExactTelemetryAttributes`/
-  `TelemetrySchemaSpanUnion` 等全部是 TypeScript **类型级编程**（条件类型/映射类型/`UnionToIntersection`），
-  Rust 无对应物也不需要。**豁免**。
-- **A6 pi-ai 107 项**：绝大多数是 `Classifier*`/`Image*`/`*Compat`/`*Routing` 等
-  **声明范围外**（见 `crates/pi-ai/AGENT.md`：只复刻 44 文件子集）。
-
-## B. 命名/结构适配（能力等价）
-
-- `AgentHarness`（interface + const 工厂） → Rust `AgentHarnessApi` + `Harness`
-- `restoreSession` → `restore_session_arc`
-- `captureLaneSnapshot`（private） → `capture_lane_snapshot_inner`
-- `setConfiguration`（private） → `set_configuration_identity`
-- `requestOperationAbort` → `request_abort`
-- `invokeToolRegistration`（private） → `invoke_registration`
-- `operationScopeOf` → `OperationState::scope()`
-- `openRecord`/`reserveId`/`wrapBranch`（memory.ts private） → `MemorySessionRepo::open`/`create` 内联
-- `getConfig`/`setConfig`（runtime/harness.ts private） → 直接 `self.config.lock()`
-- `utf8ByteLength` → `str::len()`（Rust String 天然 UTF-8）
-- `toError` → `drive/response.rs::normalize_error`
-- `splitDeferredTools` → 已删除（对齐 v0.99.2）
-- `HarnessFault` / `HarnessClosed` → 统一 `HarnessError::Closed`（**见 C2-2**）
-
-## C. 真实缺口清单（基线；✅ = 本轮已修）
-
-> 本节保留修复前的原始清单，便于对照。已修项见上方「本轮修复记录」。
-
-### C1 文件级（pi-agent）
-
-1. `harness/session/jsonl/legacy-v3.ts` — **用户已明确豁免**。
-2. `harness/session/testing/{gating-storage,instrumented-storage,storage-decorator}.ts`
-   — 测试用 storage 装饰器，Rust 侧未实现。
-3. `harness/session/testing/benchmark/{datasets,session-repo,storage}.ts` — 基准测试设施，未实现。
-4. `harness/session/testing/conformance/{session-repo,storage}.ts` — 契约测试；Rust 侧
-   `testing/conformance.rs` 注明「返回空 conformance case 列表」（上游 1000+ 行）。
-
-### C2 类型级（pi-agent）
-
-1. session 具名错误 4 个（判定为适配，见上）。
-2. **`HarnessFault` / `HarnessClosed`**：上游 `runtime/harness.ts` 用 `HarnessFault`（storage/invariant
-   fault，带 `cause`）与 `HarnessClosed`（关闭时操作仍在跑）区分两类终止；`lane.ts` 依赖
-   `closedError instanceof HarnessFault` 计算 `faulted` 标志。
-   **本轮已修**：lane 新增 `SealReason::{Fault,Closed}`，`LaneSnapshot.faulted` 按「首次 seal 原因」
-   取值（对齐上游 `??=` 语义）；`apply_fault` 传 `Fault`、`close` 传 `Closed`。
-   残留：harness 对外仍统一返回 `HarnessError::Closed`（tag `Closed`），未建独立 `HarnessFault` 错误变体。
-3. ✅ **工具入参/详情类型**：`BashToolDetails`/`ReadToolDetails` 已落地；`*ToolInput` 仍无同名导出
-   （Rust 用 serde 内联反序列化）。
-4. **Options 类型**：`AcquireLaneOptions`/`RunToolCallOptions`/`AgentToolCallOutcome`/
-   `SummaryGenerationOptions`/`ShellCaptureOptions`/`AgentHarnessToolContextSource`/
-   `AgentHarnessResources`/`StorageFixture` 无对应导出。
-5. **`PrepareRequest` / `FinishTurn` / `CustomAgentMessages`**：上游 `harness/types.ts` 的类型；
-   逻辑已随 v0.99.2 同步落地，但 Rust 侧没有同名公开类型。
-6. **telemetry span 类型**：`harness/telemetry.ts` 的 `AiSpanName`/`AiSpanAttributes`/
-   `AiSpanStartAttributes`/`HarnessSpanName`/`HarnessSpan*` 等 16 个类型。Rust 侧
-   `harness/telemetry.rs` 只有 `HOOK_NAMES`/`EVENT_TYPES` 常量表 + `agent_telemetry_schemas()`，
-   **无类型层**。
-
-### C3 行为/API 级（pi-agent）
-
-1. ✅ **`runToolCall`**：已新增公开 `run_tool_call` + `RunToolCallOptions`（见修复记录 5）。
-2. **`events.ts` 三个方法**：行为已核对等价（见上「仍属适配」）。
-3. ✅ **jsonl storage**：torn 已改为原子发布；`applyCommit` / `replayCommitted` 内联已核对等价。
-
-### C4 已确认无需处理
-
-- `onProviderStreamEvent`（0.99.0）：上游 provider 流层回调，本项目未用。
-- overflow 的 Z.AI CN 端点检测：本项目未接入 Z.AI。
-- HTTP-date 形式 `Retry-After`：Rust 侧走指数退避，上游用 `Date.parse`。
-- telemetry：上游本版只改 CHANGELOG/package.json。
+- 符号匹配用「去分隔符 + 小写」的 compact 键，因此 `lazyOAuth` ↔ `lazy_oauth` 这类缩写差异不会误报。
+- `local`（同文件命中）视为 OK；`global`（同 crate 其他文件）记为「移位」；整 crate 无同名记 MISSING。
+- 第 3 节的私有函数档覆盖上游非导出 `function`，是导出符号扫描的补充 ——
+  历史上正是靠人工读到这一层才发现 edit 的 `prepareEditArguments` 缺口。
+- **已知盲区**：`tagged_error!` 等宏生成的类型扫不到（见第一节）；Rust 侧内联实现无法自动识别。
 """
 
 
@@ -265,6 +164,27 @@ def ts_symbols(path):
         while class_depths and depth <= class_depths[-1]:
             class_depths.pop()
 
+    return out
+
+
+def ts_private_fns(path):
+    """提取非导出的顶层函数名（上游私有实现逻辑）。
+
+    导出符号扫描看不到这些函数，但真实缺口也可能藏在这里——
+    例如 edit.ts 的 `prepareEditArguments`（处理 edits 为字符串/单对象/legacy 顶层字段）。
+    """
+    out = []
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except Exception:
+        return out
+    for _raw, code in strip_comment_lines(lines):
+        s = code.strip()
+        if s.startswith("export"):
+            continue
+        m = re.match(r"^(?:async\s+)?function\s+(\w+)", s)
+        if m:
+            out.append(m.group(1))
     return out
 
 
@@ -387,7 +307,7 @@ def main():
         scope = declared_scope(pkg)
 
         report.append(f"\n## packages/{pkg} → `{rs_rel}`\n")
-        missing_files, out_of_scope, symbol_gaps = [], [], []
+        missing_files, out_of_scope, symbol_gaps, private_gaps = [], [], [], []
 
         for dp, _, files in os.walk(pkg_src):
             for f in sorted(files):
@@ -436,12 +356,26 @@ def main():
                     stats[(pkg, "missing_symbol")] += len(missing)
                     symbol_gaps.append((rel, rrel, missing, moved))
 
+                # 私有顶层函数：上游的非导出实现函数（内联到 Rust 调用方时属正常）
+                priv_missing = []
+                for pname in sorted(set(ts_private_fns(os.path.join(dp, f)))):
+                    ck2 = compact(pname)
+                    if ck2 in local_keys or ck2 in global_keys:
+                        continue
+                    priv_missing.append(
+                        (pname, fuzzy_candidates(camel_to_snake(pname), rust_all))
+                    )
+                if priv_missing:
+                    stats[(pkg, "private_gap")] += len(priv_missing)
+                    private_gaps.append((rel, rrel, priv_missing))
+
         report.append(
             f"\n统计：配对 {stats[(pkg,'paired')]} 文件 · "
             f"文件缺失 {stats[(pkg,'missing_file')]} · "
             f"范围外 {stats[(pkg,'out_of_scope')]} · "
             f"符号缺失 {stats[(pkg,'missing_symbol')]} · "
-            f"符号移位 {stats[(pkg,'moved')]}\n"
+            f"符号移位 {stats[(pkg,'moved')]} · "
+            f"私有函数差异 {stats[(pkg,'private_gap')]}\n"
         )
 
         report.append("\n### 1) 文件级缺失（范围内，Rust 侧无对应文件）\n\n")
@@ -472,6 +406,22 @@ def main():
         else:
             report.append("（无）\n")
 
+        report.append("\n### 3) 私有顶层函数差异（TS 非导出实现函数，Rust 未见同名）\n\n")
+        report.append(
+            "> 上游 `function foo()` 这类非导出实现函数。Rust 常把它们内联进调用方，\n"
+            "> 因此大量属于正常；但**真实缺口也藏在这里**——edit.ts 的 `prepareEditArguments`\n"
+            "> 就是靠人工读到这一层才发现的（处理 `edits` 为字符串/单对象/legacy 顶层字段）。\n"
+            "> 需人工逐条确认。\n\n"
+        )
+        if private_gaps:
+            for rel, rrel, items in private_gaps:
+                report.append(f"\n**`{rel}`** → `{rrel}`\n\n")
+                for name, fz in items:
+                    tail = f"  ← 候选: {', '.join('`'+c+'`' for c in fz)}" if fz else ""
+                    report.append(f"- PRIVATE `{name}`{tail}\n")
+        else:
+            report.append("（无）\n")
+
     header = [
         "# pi_rs ↔ upstream 方法级对比报告\n\n",
         "> 基线：`upstream/` 检出于 `v0.99.2`（HEAD `005af57d8`）\n\n",
@@ -495,7 +445,8 @@ def main():
         header.append(
             f"- **{pkg}** → `{rs_rel}`：配对 {stats[(pkg,'paired')]} · "
             f"缺文件 {stats[(pkg,'missing_file')]} · 范围外 {stats[(pkg,'out_of_scope')]} · "
-            f"缺符号 {stats[(pkg,'missing_symbol')]} · 移位 {stats[(pkg,'moved')]}\n"
+            f"缺符号 {stats[(pkg,'missing_symbol')]} · 移位 {stats[(pkg,'moved')]} · "
+            f"私有函数差异 {stats[(pkg,'private_gap')]}\n"
         )
 
     with open(OUT, "w", encoding="utf-8") as fh:
@@ -508,7 +459,7 @@ def main():
             continue
         print(f"{pkg}: paired={stats[(pkg,'paired')]} missing_file={stats[(pkg,'missing_file')]} "
               f"out_of_scope={stats[(pkg,'out_of_scope')]} missing_symbol={stats[(pkg,'missing_symbol')]} "
-              f"moved={stats[(pkg,'moved')]}")
+              f"moved={stats[(pkg,'moved')]} private_gap={stats[(pkg,'private_gap')]}")
 
 
 if __name__ == "__main__":

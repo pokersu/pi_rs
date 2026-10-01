@@ -63,9 +63,11 @@ agent 运行时核心：`Agent` 类 + 双层循环 + 工具执行管线 + 消息
     - `runtime/drive/tool-placement.rs`：**移除** `addedToolNames` → `activeToolNames` 的自动增量写回与对应 `ConfigUpdate::ActiveTools` 事件（对齐上游：工具激活改为显式——由 `setActiveTools` 或调用方更新工具集；装载变化由 transcript 承载）。同时删除了不再使用的 `next_config_contains` 与该 lane patch 中的 configuration 改写。
 15. **循环钩子 Breaking（对齐 v0.99.2）**：删除 `shouldStopAfterTurn`，改为 `finishTurn`（返回 `AgentTurnDecision::End | Continue`）——在 assistant 与全部工具结果 finalize 后、`turn_end` **之前**运行，决策在 `turn_end` **之后**应用（`End` 结束正常 run 且不动 steering/follow-up 队列；`Continue` 确保再进行一次 provider 请求；error/aborted 仍为硬退出，不会走到该回调）。新增 `prepareRequest`（每次 provider 请求前运行，含首次；可替换 context/model/thinkingLevel，且不轮询队列）与 `Agent.peekQueuedMessages()`（预览下一轮队列消息，steering 优先、为空则 follow-up）。`ShouldStopAfterTurnContext` 更名为 `AgentTurnContext`（旧名保留为类型别名）；`AgentRequestUpdate` 的 `thinking_level` 用 `Option<ThinkingLevel>`（`None` = 不更新，可表达 `off`），`PrepareRequestContext.thinking_level` 与 `stream.reasoning` 一致。
 16. **小项同步（对齐 v0.99.2）**：`AssistantMessage` 新增 `thinking_level`（agent-loop 在流结果上填入 `config.stream.reasoning`，对应上游 `Object.assign(result, { thinkingLevel })`）；图片检测改为 `GIF87a` / `GIF89a`（避免以 `GIF` 开头的文本文件被误判）；`provider-retry` 对非有限的 `Retry-After` 值回落到指数退避。**未同步**：`onProviderStreamEvent`（需穿透 provider 流层）、overflow 的 Z.AI CN 检测（本项目未用该 provider）。
-17. **与上游的对齐状态**：工具执行层与会话层已对照上游逐项核实，并修复 9 处不匹配；
-    其中 `isError` 曾是**真实缺陷**（工具抛错被上报为成功），已由 `ExecutedToolCallOutcome` 贯通修复。
-    尚未对齐的项（工具入参类型、telemetry span 类型层、session 具名错误等）见根 `todos.md` 的 C 类。
+17. **与上游的对齐状态**：工具执行层与会话层已逐项对照上游核实；其中 `isError` 曾是真缺陷
+    （工具抛错被上报为成功），已由 `ExecutedToolCallOutcome` 贯通修复；`AgentTool` 已带
+    `prepare_arguments`（含 edit 的 legacy / 字符串形态规范化）；fault 与 close 分别对应
+    `HarnessError::Fault`（`HarnessFault{message, cause}`）与 `Closed`。
+    **仍未对齐**的项（telemetry span 类型层、session 具名错误、legacy-v3、测试套件等）见根 `todos.md`。
 
 ## 阅读步骤
 

@@ -25,8 +25,8 @@
 
 - **B 类**（平台 / 测试 / 迁移，非 runtime 产品逻辑）：B1 Node 环境适配、B2 一致性测试套件、
   B3 legacy-v3 JSONL 迁移。
-- **C 类**（类型层 / API 形态，**无运行时行为**或已核实等价）：C1 工具入参类型、C2 telemetry span
-  类型层、C3 session 具名错误、C4 `HarnessFault`/`HarnessClosed` 变体、C5 conformance 空实现。
+- **C 类**（类型层 / API 形态，**无运行时行为**或已核实等价）：C2 telemetry span 类型层、
+  C3 session 具名错误、C5 conformance 空实现。
 
 ### 上游已知偏差（未同步的能力）
 
@@ -55,20 +55,16 @@ python3 tools.d/.parity/scan.py
 | B2 | 会话一致性测试套件 | `session/testing/conformance/*` + `benchmark/*` + `gating-storage.ts` + `storage-decorator.ts` + `instrumented-storage.ts` | 测试基建（约 2,275 行），验证 storage/repo 契约 |
 | B3 | 旧版 JSONL 迁移 | `session/jsonl/legacy-v3.ts` | **用户已明确要求不复刻**；Rust `V3Legacy` 分支显式返回 Err |
 
-### C 类 —— 类型层 / API 形态（2026-10-01 全量对比新增）
+### C 类 —— 类型层 / API 形态（仍存在的差异）
 
 | # | 项 | 影响 | 估算 | 建议 |
 |---|----|------|------|------|
-| C1 | 工具入参类型 `BashToolInput` / `EditToolInput` / `ReadToolInput` / `WriteToolInput` | 无运行时差异，仅缺 API 形态与编译期类型安全 | 小 | 可补 |
-| C2 | `harness/telemetry.ts` 的 16 个 span 类型 | 无运行时行为，纯类型层 | 小–中 | 可补 |
+| C2 | 类型层豁免（无运行时行为）：telemetry 的 16 个 span 类型、工具 `*ToolInput` | 均为从 schema 推导的类型（`TelemetrySchemaSpanName<typeof SCHEMA>` / `Static<typeof schema>`），Rust 无对应能力；运行时已存在 | — | 豁免 |
 | C3 | session 4 个具名错误类型 | 已核实：消息逐字对齐、上游无 `instanceof` 分支 → 无行为差异 | 大 | 不建议 |
-| C4 | `HarnessFault` / `HarnessClosed` 错误变体 | 已核实：唯一消费点在 lane 层且已对齐 → 无行为差异 | 小 | 不建议 |
 | C5 | `session/testing/conformance` 空实现 | 无运行时；决定 storage 契约回归能力 | 中–大 | 见 B2 |
 
-已核实豁免（不再跟踪）：`jsonl` legacy-v3 相关方法、`events.ts` 三方法（行为等价）、
-`jsonl/storage.ts` 私有方法（已内联）、`result.ts` 的 13 个错误类（`tagged_error!` 宏生成）、
-`Result`/`ok`/`err`（用标准库）、`session/types.ts` 的 16 个 `*Operation`（enum variants）、
-`pi-telemetry` 12 项类型级编程、`pi-ai` 107 项中的范围外部分。
+> 扫描报告中其余大量 MISSING 属机械假阳性（宏生成 / 语言替换 / 类型合并 / 命名适配 / 内联实现 /
+> 范围外 provider），逐类说明见 `UPSTREAM-PARITY.md` 文末「人工复核结论」。（已对齐项不再列出。）
 
 ## 上游源码镜像（只读参考，已 gitignore）
 
