@@ -12,6 +12,7 @@ use crate::harness::context::Context;
 use crate::harness::session::commit::CommittedWrite;
 use crate::harness::session::in_memory_storage_state::InMemoryStorageState;
 use crate::harness::session::jsonl::codec::parse_jsonl_session_header;
+use crate::harness::session::jsonl::io::publish_file_atomically;
 use crate::harness::session::jsonl::types::{JSONL_STORAGE_VERSION, JsonlStorageHeader};
 use crate::harness::session::types::{
     CommitResult, Entry, EntryScan, EntryStructure, SessionStats, Storage, StorageBranchScan,
@@ -178,14 +179,17 @@ impl JsonlStorage {
             storage_state.advance_next_seq(next_seq);
         }
         if torn {
-            let _ = options
-                .file_system
-                .write_file(
-                    &options.path,
-                    format!("{}\n", lines.join("\n")).as_bytes(),
-                    context,
-                )
-                .await;
+            // 对齐上游：torn 文件用原子发布重写（先写 temp 再 rename）。
+            publish_file_atomically(
+                options.file_system.as_ref(),
+                &options.path,
+                context,
+                |append| {
+                    append(&format!("{}\n", lines.join("\n")));
+                    Ok(())
+                },
+            )
+            .await?;
         }
         Ok(Self {
             options,

@@ -116,6 +116,8 @@ async fn execute_http(config: &HttpToolConfig, params: &serde_json::Value) -> Ag
             usage: None,
             added_tool_names: None,
             terminate: false,
+            is_error: false,
+            structured_content: None,
         }
     } else {
         panic!("HTTP {}: {body}", status.as_u16());

@@ -228,6 +228,8 @@ async fn agent_loop_executes_tool_call() {
                     usage: None,
                     added_tool_names: None,
                     terminate: false,
+                    is_error: false,
+                    structured_content: None,
                 }
             })
         }),
@@ -423,6 +425,8 @@ async fn stream_without_start_event_keeps_context_intact() {
                     usage: None,
                     added_tool_names: None,
                     terminate: false,
+                    is_error: false,
+                    structured_content: None,
                 }
             })
         }),

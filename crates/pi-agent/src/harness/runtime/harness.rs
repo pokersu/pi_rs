@@ -14,7 +14,7 @@ use crate::harness::agent_harness::{
 use crate::harness::context::Context;
 use crate::harness::events::{HarnessEventBus, WatchHandler};
 use crate::harness::hooks::HookRegistry;
-use crate::harness::runtime::lane::{FaultHandler, LaneImpl};
+use crate::harness::runtime::lane::{FaultHandler, LaneImpl, SealReason};
 use crate::harness::runtime::restore::{
     ClassifiedLaneStorage, read_lane_storage, restore_lane_state, restore_session_arc,
 };
@@ -69,7 +69,7 @@ fn apply_fault(
     let fault = format!("AgentHarness storage or invariant fault: {cause}");
     *fault_error.lock().unwrap() = Some(fault.clone());
     for lane in lanes.lock().unwrap().values() {
-        lane.seal(fault.clone());
+        lane.seal(fault.clone(), SealReason::Fault);
     }
     hooks.close(fault.clone());
     // emit 的同步部分（recipients 绑定）必须在 events.close 之前执行；
@@ -645,7 +645,7 @@ impl AgentHarnessApi for Harness {
         let error = "AgentHarness was closed while the operation was active".to_string();
         *self.closed_error.lock().unwrap() = Some(error.clone());
         for lane in self.lanes.lock().unwrap().values() {
-            let _ = lane.seal(error.clone());
+            let _ = lane.seal(error.clone(), SealReason::Closed);
         }
         self.hooks.close(error.clone());
         self.events.close(error.clone());

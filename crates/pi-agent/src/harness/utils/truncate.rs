@@ -7,7 +7,8 @@ pub const DEFAULT_MAX_BYTES: usize = 50 * 1024;
 pub const GREP_MAX_LINE_LENGTH: usize = 500;
 
 /// 对应 `TruncationResult`
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TruncationResult {
     pub content: String,
     pub truncated: bool,

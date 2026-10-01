@@ -374,7 +374,16 @@ struct LaneInner {
     idle_owner: Option<Arc<Notify>>,
     generation: u64,
     closed_error: Option<String>,
+    /// 对应上游 `closedError instanceof HarnessFault`。
+    faulted: bool,
     active_drive: Option<crate::harness::runtime::types::Drive>,
+}
+
+/// 对应上游 `seal(error)` 传入的两类错误（`HarnessFault` / `HarnessClosed`）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SealReason {
+    Fault,
+    Closed,
 }
 
 /// 对应 `Lane`（runtime 实现）。
@@ -419,6 +428,7 @@ impl LaneImpl {
                 idle_owner: None,
                 generation: 0,
                 closed_error: None,
+                faulted: false,
                 active_drive: None,
             })),
             notify: Arc::new(Notify::new()),
@@ -430,11 +440,13 @@ impl LaneImpl {
         self.self_weak.upgrade().expect("LaneImpl self reference")
     }
 
-    /// 对应 `seal`。
-    pub fn seal(&self, error: String) {
+    /// 对应 `seal`。`reason` 区分上游的 `HarnessFault` / `HarnessClosed`：
+    /// 首次 seal 的错误类型决定 `LaneSnapshot.faulted`（对齐上游 `closedError ??=` 语义）。
+    pub fn seal(&self, error: String, reason: SealReason) {
         let mut guard = self.inner.lock().unwrap();
         if guard.closed_error.is_none() {
             guard.closed_error = Some(error.clone());
+            guard.faulted = reason == SealReason::Fault;
         }
         if let Some(drive) = &guard.active_drive {
             drive.close_gate(error.clone());
@@ -2029,7 +2041,7 @@ impl LaneImpl {
             stats,
             operation: operation_snapshot,
             queues,
-            faulted: self.inner.lock().unwrap().closed_error.is_some(),
+            faulted: self.inner.lock().unwrap().faulted,
         })
     }
 

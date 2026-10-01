@@ -109,6 +109,8 @@ fn create_error_tool_result(message: &str) -> AgentToolResult {
         usage: None,
         added_tool_names: None,
         terminate: false,
+        is_error: true,
+        structured_content: None,
     }
 }
 
@@ -285,6 +287,8 @@ pub fn finalize_tool_call(
             usage: p.usage.or(executed.result.usage),
             added_tool_names: executed.result.added_tool_names,
             terminate: p.terminate.unwrap_or(executed.result.terminate),
+            is_error: false,
+            structured_content: None,
         },
         None => executed.result,
     };
@@ -304,6 +308,8 @@ pub fn tool_result_from_message(message: &ToolResultMessage, terminate: bool) ->
         usage: message.usage.clone(),
         added_tool_names: message.added_tool_names.clone(),
         terminate,
+        is_error: false,
+        structured_content: None,
     }
 }
 

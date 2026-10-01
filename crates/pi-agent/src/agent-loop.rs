@@ -15,9 +15,10 @@ use pi_ai::{
 };
 
 use crate::types::{
-    AfterToolCallContext, AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool,
-    AgentToolResult, AgentTurnContext, AgentTurnDecision, BeforeToolCallContext,
-    PrepareRequestContext, StreamFn, ToolExecutionMode,
+    AfterToolCallContext, AfterToolCallFn, AgentContext, AgentEvent, AgentLoopConfig, AgentMessage,
+    AgentTool, AgentToolResult, AgentTurnContext, AgentTurnDecision, BeforeToolCallContext,
+    BeforeToolCallFn, PrepareRequestContext, StreamFn, ToolCallHooks, ToolExecutionMode,
+    ToolUpdateSink,
 };
 
 /// 对应 `AgentEventSink`
@@ -45,8 +46,17 @@ enum PreparedToolCall {
 
 /// 对应 `FinalizedToolCallOutcome`
 #[derive(Clone)]
-struct FinalizedToolCallOutcome {
-    tool_call: ToolCall,
+pub struct FinalizedToolCallOutcome {
+    pub tool_call: ToolCall,
+    pub result: AgentToolResult,
+    pub is_error: bool,
+}
+
+/// 对应上游公开导出的 `AgentToolCallOutcome`（与 `FinalizedToolCallOutcome` 同构）。
+pub type AgentToolCallOutcome = FinalizedToolCallOutcome;
+
+/// 对应 `ExecutedToolCallOutcome`：工具已执行但尚未跑 `afterToolCall` 钩子。
+struct ExecutedToolCallOutcome {
     result: AgentToolResult,
     is_error: bool,
 }
@@ -753,6 +763,7 @@ async fn execute_tool_calls_sequential(
     signal: Option<&AbortSignal>,
     emit: &AgentEventSink,
 ) -> ExecutedToolCallBatch {
+    let hooks = tool_call_hooks_of(config);
     let mut finalized_calls: Vec<FinalizedToolCallOutcome> = Vec::new();
     let mut messages: Vec<ToolResultMessage> = Vec::new();
 
@@ -768,7 +779,7 @@ async fn execute_tool_calls_sequential(
             current_context,
             assistant_message,
             tool_call,
-            config,
+            &hooks,
             signal,
         )
         .await;
@@ -791,7 +802,7 @@ async fn execute_tool_calls_sequential(
                     &tool_call,
                     &args,
                     executed,
-                    config,
+                    &hooks,
                     signal,
                 )
                 .await
@@ -825,6 +836,7 @@ async fn execute_tool_calls_parallel(
     emit: &AgentEventSink,
 ) -> ExecutedToolCallBatch {
     type BoxFuture = Pin<Box<dyn Future<Output = FinalizedToolCallOutcome> + Send>>;
+    let hooks = Arc::new(tool_call_hooks_of(config));
     let mut futures: Vec<BoxFuture> = Vec::new();
 
     for tool_call in tool_calls {
@@ -839,7 +851,7 @@ async fn execute_tool_calls_parallel(
             current_context,
             assistant_message,
             tool_call,
-            config,
+            &hooks,
             signal,
         )
         .await;
@@ -860,7 +872,7 @@ async fn execute_tool_calls_parallel(
             } => {
                 let context = current_context.clone();
                 let assistant_message = assistant_message.clone();
-                let config = config.clone();
+                let hooks = Arc::clone(&hooks);
                 let signal = signal.cloned();
                 let emit = emit.clone();
                 Box::pin(async move {
@@ -887,7 +899,7 @@ async fn execute_tool_calls_parallel(
                         &tool_call,
                         &args,
                         executed,
-                        &config,
+                        &hooks,
                         signal.as_ref(),
                     )
                     .await;
@@ -928,12 +940,99 @@ fn prepare_tool_call_arguments(_tool: &AgentTool, tool_call: &ToolCall) -> ToolC
     tool_call.clone()
 }
 
+/// 对应 `RunToolCallOptions`（`ToolCallHooks` + 单次调用上下文）。
+#[derive(Clone)]
+pub struct RunToolCallOptions {
+    /// 该调用所解析到的工具集。
+    pub tools: Vec<AgentTool>,
+    /// 传给钩子的「发起该调用的」assistant 消息。
+    pub assistant_message: AssistantMessage,
+    /// 传给钩子的当前 agent 上下文。
+    pub context: AgentContext,
+    pub signal: Option<AbortSignal>,
+    /// 接收工具执行中的部分结果。
+    pub on_update: Option<ToolUpdateSink>,
+    pub before_tool_call: Option<BeforeToolCallFn>,
+    pub after_tool_call: Option<AfterToolCallFn>,
+}
+
+/// 对应 `runToolCall`：以与模型发起的调用完全相同的步骤跑一次工具调用
+/// （参数准备 → schema 校验 → `beforeToolCall` → 执行 → `afterToolCall`）。
+///
+/// 不发事件、不加消息。工具内部调用其他工具时用它，让钩子（例如权限检查）同样生效。
+/// 工具失败（未知工具、校验失败、被阻塞、抛错）不 reject，而以 `is_error: true` 返回。
+pub async fn run_tool_call(
+    tool_call: &ToolCall,
+    options: RunToolCallOptions,
+) -> AgentToolCallOutcome {
+    let mut context = options.context.clone();
+    context.tools = Some(options.tools.clone());
+    let hooks = ToolCallHooks {
+        before_tool_call: options.before_tool_call.clone(),
+        after_tool_call: options.after_tool_call.clone(),
+    };
+
+    let preparation = prepare_tool_call(
+        &context,
+        &options.assistant_message,
+        tool_call,
+        &hooks,
+        options.signal.as_ref(),
+    )
+    .await;
+
+    match preparation {
+        PreparedToolCall::Immediate { result, is_error } => FinalizedToolCallOutcome {
+            tool_call: tool_call.clone(),
+            result,
+            is_error,
+        },
+        PreparedToolCall::Prepared {
+            tool_call: prepared,
+            tool,
+            args,
+        } => {
+            // 上游此路径「Emits no events」：把内部 tool_execution_update 转给 onUpdate 回调。
+            let on_update = options.on_update.clone();
+            let sink: AgentEventSink = Arc::new(move |event: AgentEvent| {
+                if let AgentEvent::ToolExecutionUpdate { partial_result, .. } = &event
+                    && let Some(callback) = &on_update
+                {
+                    callback(partial_result.clone());
+                }
+                Box::pin(async {})
+            });
+            let executed =
+                execute_prepared_tool_call(&prepared, &tool, &args, options.signal.as_ref(), &sink)
+                    .await;
+            finalize_executed_tool_call(
+                &context,
+                &options.assistant_message,
+                &prepared,
+                &args,
+                executed,
+                &hooks,
+                options.signal.as_ref(),
+            )
+            .await
+        }
+    }
+}
+
+/// 从 `AgentLoopConfig` 抽出工具钩子（对应上游把 `ToolCallHooks` 与配置解耦的形态）。
+fn tool_call_hooks_of(config: &AgentLoopConfig) -> ToolCallHooks {
+    ToolCallHooks {
+        before_tool_call: config.before_tool_call.clone(),
+        after_tool_call: config.after_tool_call.clone(),
+    }
+}
+
 /// 对应 `prepareToolCall`
 async fn prepare_tool_call(
     current_context: &AgentContext,
     assistant_message: &AssistantMessage,
     tool_call: &ToolCall,
-    config: &AgentLoopConfig,
+    hooks: &ToolCallHooks,
     signal: Option<&AbortSignal>,
 ) -> PreparedToolCall {
     let tool = match current_context
@@ -961,7 +1060,7 @@ async fn prepare_tool_call(
         }
     };
 
-    if let Some(before) = &config.before_tool_call {
+    if let Some(before) = &hooks.before_tool_call {
         let before_result = before(
             &BeforeToolCallContext {
                 assistant_message: assistant_message.clone(),
@@ -1018,7 +1117,7 @@ async fn execute_prepared_tool_call(
     args: &serde_json::Value,
     signal: Option<&AbortSignal>,
     emit: &AgentEventSink,
-) -> AgentToolResult {
+) -> ExecutedToolCallOutcome {
     let update_events: Arc<std::sync::Mutex<Vec<AgentEvent>>> =
         Arc::new(std::sync::Mutex::new(Vec::new()));
     let accepting_updates = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -1040,7 +1139,7 @@ async fn execute_prepared_tool_call(
                     tool_call_id: tool_call_id.clone(),
                     tool_name: tool_name.clone(),
                     args: args_owned.clone(),
-                    partial_result: partial.details.clone(),
+                    partial_result: partial.clone(),
                 });
         }) as Box<dyn Fn(AgentToolResult) + Send>)
     };
@@ -1057,7 +1156,10 @@ async fn execute_prepared_tool_call(
         Ok(result) => result,
         Err(payload) => {
             accepting_updates.store(false, std::sync::atomic::Ordering::Relaxed);
-            return create_error_tool_result(&panic_message(&payload));
+            return ExecutedToolCallOutcome {
+                result: create_error_tool_result(&panic_message(&payload)),
+                is_error: true,
+            };
         }
     };
     accepting_updates.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -1068,7 +1170,9 @@ async fn execute_prepared_tool_call(
         emit(event).await;
     }
 
-    result
+    // 对齐上游 `isError: result.isError === true`。
+    let is_error = result.is_error;
+    ExecutedToolCallOutcome { result, is_error }
 }
 
 /// 对应 `finalizeExecutedToolCall`
@@ -1077,14 +1181,14 @@ async fn finalize_executed_tool_call(
     assistant_message: &AssistantMessage,
     tool_call: &ToolCall,
     args: &serde_json::Value,
-    executed: AgentToolResult,
-    config: &AgentLoopConfig,
+    executed: ExecutedToolCallOutcome,
+    hooks: &ToolCallHooks,
     signal: Option<&AbortSignal>,
 ) -> FinalizedToolCallOutcome {
-    let mut result = executed;
-    let mut is_error = false;
+    let mut result = executed.result;
+    let mut is_error = executed.is_error;
 
-    if let Some(after) = &config.after_tool_call {
+    if let Some(after) = &hooks.after_tool_call {
         let after_result = after(
             &AfterToolCallContext {
                 assistant_message: assistant_message.clone(),
@@ -1098,10 +1202,20 @@ async fn finalize_executed_tool_call(
         )
         .await;
         if let Some(after_result) = after_result {
+            // 对齐上游：`structuredContent` 与 `content` 替换联动——
+            // 若钩子只换了 content 而未给 structuredContent，则丢弃旧的（已不匹配）。
+            let structured_content = after_result.structured_content.or_else(|| {
+                if after_result.content.is_some() {
+                    None
+                } else {
+                    result.structured_content.clone()
+                }
+            });
             result.content = after_result.content.unwrap_or(result.content);
             result.details = after_result.details.unwrap_or(result.details);
             result.usage = after_result.usage.or(result.usage);
             result.terminate = after_result.terminate.unwrap_or(result.terminate);
+            result.structured_content = structured_content;
             is_error = after_result.is_error.unwrap_or(is_error);
         }
     }
@@ -1125,6 +1239,8 @@ fn create_error_tool_result(message: &str) -> AgentToolResult {
         usage: None,
         added_tool_names: None,
         terminate: false,
+        is_error: true,
+        structured_content: None,
     }
 }
 

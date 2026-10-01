@@ -9,11 +9,11 @@ use std::time::{Duration, Instant};
 use pi_ai::{TextContent, TextKind, TextOrImageContent};
 
 use crate::harness::context::{BACKGROUND_CONTEXT, Context, with_abort_signal};
-use crate::harness::result::get_or_throw;
 use crate::harness::types::{
-    ExecutionEnv, ShellExecOptions, ShellOutputCaptureOptions, ShellOutputLimits,
-    ShellOutputRetention, ShellOutputUpdate, ShellOutputUpdateCallback,
+    ExecutionEnv, ExecutionErrorCode, ShellExecOptions, ShellOutputCaptureOptions,
+    ShellOutputLimits, ShellOutputRetention, ShellOutputUpdate, ShellOutputUpdateCallback,
 };
+use crate::harness::utils::truncate::format_size;
 use crate::types::{AgentTool, AgentToolResult};
 
 const DEFAULT_MAX_LINES: usize = 2000;
@@ -135,8 +135,8 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>, options: BashToolOptions) ->
                     prepare(&mut execution, &context).await;
                 }
 
-                let result = get_or_throw(
-                    env.exec(
+                let exec_result = env
+                    .exec(
                         &execution.command,
                         ShellExecOptions {
                             cwd: Some(execution.cwd.clone()),
@@ -159,12 +159,92 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>, options: BashToolOptions) ->
                         },
                         &context,
                     )
-                    .await,
-                );
+                    .await;
 
-                let output = accumulated.lock().unwrap().clone();
-                if result.exit_code != 0 {
-                    panic!("Command exited with code {}\n{}", result.exit_code, output);
+                let mut output = accumulated.lock().unwrap().clone();
+
+                // 对齐上游：截断时补 `BashToolDetails` 并在输出尾部追加提示。
+                let mut details = serde_json::Value::Null;
+                if let Ok(result) = &exec_result
+                    && result.truncation.truncated
+                {
+                    let truncation = &result.truncation;
+                    let mut details_obj = serde_json::Map::new();
+                    details_obj.insert(
+                        "truncation".to_string(),
+                        serde_json::to_value(truncation).unwrap_or(serde_json::Value::Null),
+                    );
+                    if let Some(spill) = &result.spill_path {
+                        details_obj.insert(
+                            "fullOutputPath".to_string(),
+                            serde_json::Value::String(spill.clone()),
+                        );
+                    }
+                    details = serde_json::Value::Object(details_obj);
+
+                    let start_line = truncation
+                        .total_lines
+                        .saturating_sub(truncation.output_lines)
+                        + 1;
+                    let end_line = truncation.total_lines;
+                    let spill = result.spill_path.clone().unwrap_or_default();
+                    if truncation.last_line_partial {
+                        let last_line_size =
+                            format_size(result.last_line_bytes.unwrap_or(truncation.output_bytes));
+                        output.push_str(&format!(
+                            "\n\n[Showing last {} of line {end_line} (line is {last_line_size}). Full output: {spill}]",
+                            format_size(truncation.output_bytes)
+                        ));
+                    } else if truncation.truncated_by.as_deref() == Some("lines") {
+                        output.push_str(&format!(
+                            "\n\n[Showing lines {start_line}-{end_line} of {}. Full output: {spill}]",
+                            truncation.total_lines
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "\n\n[Showing lines {start_line}-{end_line} of {} ({} limit). Full output: {spill}]",
+                            truncation.total_lines,
+                            format_size(DEFAULT_MAX_BYTES)
+                        ));
+                    }
+                }
+
+                match exec_result {
+                    Err(error) => {
+                        let status = if error.code == ExecutionErrorCode::Timeout {
+                            format!(
+                                "Command timed out after {} seconds",
+                                timeout.unwrap_or_default()
+                            )
+                        } else if error.code == ExecutionErrorCode::Aborted {
+                            "Command aborted".to_string()
+                        } else {
+                            error.message.clone()
+                        };
+                        panic!(
+                            "{}",
+                            if output.is_empty() {
+                                status
+                            } else {
+                                format!("{output}\n\n{status}")
+                            }
+                        );
+                    }
+                    Ok(result) => {
+                        if result.exit_code != 0 {
+                            panic!(
+                                "{}",
+                                if output.is_empty() {
+                                    format!("Command exited with code {}", result.exit_code)
+                                } else {
+                                    format!(
+                                        "{output}\n\nCommand exited with code {}",
+                                        result.exit_code
+                                    )
+                                }
+                            );
+                        }
+                    }
                 }
 
                 let output = if output.is_empty() {
@@ -179,10 +259,12 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>, options: BashToolOptions) ->
                         text: output,
                         text_signature: None,
                     })],
-                    details: serde_json::Value::Null,
+                    details,
                     usage: None,
                     added_tool_names: None,
                     terminate: false,
+                    is_error: false,
+                    structured_content: None,
                 }
             })
         }),
@@ -202,5 +284,7 @@ fn text_update(text: &str) -> AgentToolResult {
         usage: None,
         added_tool_names: None,
         terminate: false,
+        is_error: false,
+        structured_content: None,
     }
 }

@@ -39,6 +39,8 @@ pub fn create_now_tool() -> AgentTool {
                     usage: None,
                     added_tool_names: None,
                     terminate: false,
+                    is_error: false,
+                    structured_content: None,
                 }
             })
         }),

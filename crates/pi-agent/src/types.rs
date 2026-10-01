@@ -150,6 +150,7 @@ pub struct BeforeToolCallResult {
 pub struct AfterToolCallResult {
     pub content: Option<Vec<TextOrImageContent>>,
     pub details: Option<serde_json::Value>,
+    pub structured_content: Option<serde_json::Value>,
     pub is_error: Option<bool>,
     pub usage: Option<Usage>,
     pub terminate: Option<bool>,
@@ -161,7 +162,13 @@ pub struct AfterToolCallResult {
 pub struct AgentToolResult {
     pub content: Vec<TextOrImageContent>,
     pub details: serde_json::Value,
+    /// 对应 `structuredContent`：匹配工具 `outputSchema` 的机器可读结果，不发给模型。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<serde_json::Value>,
     pub usage: Option<Usage>,
+    /// 对应 `isError`：不抛错地报告失败；模型看到的 `content` 等价于错误结果。
+    #[serde(default)]
+    pub is_error: bool,
     pub added_tool_names: Option<Vec<String>>,
     pub terminate: bool,
 }
@@ -314,7 +321,7 @@ pub enum AgentEvent {
         tool_call_id: String,
         tool_name: String,
         args: serde_json::Value,
-        partial_result: serde_json::Value,
+        partial_result: AgentToolResult,
     },
     ToolExecutionEnd {
         tool_call_id: String,
@@ -429,6 +436,16 @@ pub type AfterToolCallFn = Arc<
         + Send
         + Sync,
 >;
+
+/// 对应 `ToolCallHooks`：工具调用前后钩子的集合（`AgentLoopConfig` 与 `RunToolCallOptions` 共用）。
+#[derive(Clone, Default)]
+pub struct ToolCallHooks {
+    pub before_tool_call: Option<BeforeToolCallFn>,
+    pub after_tool_call: Option<AfterToolCallFn>,
+}
+
+/// 对应 `ToolUpdateSink`：工具执行中流式部分结果的接收端。
+pub type ToolUpdateSink = Arc<dyn Fn(AgentToolResult) + Send + Sync>;
 
 /// 对应 `AgentLoopConfig`
 #[derive(Clone)]

@@ -13,6 +13,9 @@ pub mod stream_fn;
 pub mod types;
 
 pub use agent::{Agent, AgentOptions};
-pub use agent_loop::{agent_loop, agent_loop_continue, run_agent_loop, run_agent_loop_continue};
+pub use agent_loop::{
+    AgentToolCallOutcome, FinalizedToolCallOutcome, RunToolCallOptions, agent_loop,
+    agent_loop_continue, run_agent_loop, run_agent_loop_continue, run_tool_call,
+};
 pub use stream_fn::{get_default_stream_fn, set_default_stream_fn};
 pub use types::*;

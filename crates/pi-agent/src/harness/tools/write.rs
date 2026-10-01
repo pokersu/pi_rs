@@ -50,6 +50,8 @@ pub fn create_write_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
 					usage: None,
 					added_tool_names: None,
 					terminate: false,
+					is_error: false,
+					structured_content: None,
 				}
 			})
 		}),

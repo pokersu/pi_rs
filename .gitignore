@@ -4,3 +4,5 @@
 .idea/
 /tools.d/upstream-ref/
 /upstream/
+.DS_Store
+__pycache__/

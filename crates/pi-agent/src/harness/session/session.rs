@@ -690,11 +690,17 @@ impl StorageBackedSession {
     }
 
     fn assert_valid_branch_name(name: &str) -> Result<(), String> {
+        // 对齐上游 `SessionInvalidBranchError`：`Invalid branch ${JSON.stringify(branch)}: ${reason}`
+        let quoted = serde_json::to_string(name).unwrap_or_else(|_| format!("\"{name}\""));
         if name.is_empty() {
-            return Err("branch name must not be empty".to_string());
+            return Err(format!(
+                "Invalid branch {quoted}: branch name must not be empty"
+            ));
         }
         if name.contains('\0') {
-            return Err("branch name must not contain \\u0000".to_string());
+            return Err(format!(
+                "Invalid branch {quoted}: branch name must not contain \\u0000"
+            ));
         }
         Ok(())
     }

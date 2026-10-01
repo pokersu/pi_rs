@@ -144,6 +144,8 @@ async fn read_file(
                     usage: None,
                     added_tool_names: None,
                     terminate: false,
+                    is_error: false,
+                    structured_content: None,
                 },
                 ReadImageProcessorResult::Err { message } => AgentToolResult {
                     content: vec![text_content(format!(
@@ -153,6 +155,8 @@ async fn read_file(
                     usage: None,
                     added_tool_names: None,
                     terminate: false,
+                    is_error: false,
+                    structured_content: None,
                 },
             };
         }
@@ -166,6 +170,8 @@ async fn read_file(
                 usage: None,
                 added_tool_names: None,
                 terminate: false,
+                is_error: false,
+                structured_content: None,
             };
         }
         return AgentToolResult {
@@ -181,6 +187,8 @@ async fn read_file(
             usage: None,
             added_tool_names: None,
             terminate: false,
+            is_error: false,
+            structured_content: None,
         };
     }
 
@@ -200,6 +208,8 @@ async fn read_file(
             usage: None,
             added_tool_names: None,
             terminate: false,
+            is_error: false,
+            structured_content: None,
         };
     }
 
@@ -216,13 +226,18 @@ async fn read_file(
 
     let truncation = truncate_head(&selected_content, TruncationOptions::default());
 
+    // 对齐上游 `ReadToolDetails`：截断时携带 truncation 信息。
+    let mut details = serde_json::Value::Null;
+
     let output = if truncation.first_line_exceeds_limit {
+        details = serde_json::json!({ "truncation": truncation });
         let first_line_size = format_size(all_lines[start_line].len());
         format!(
             "[Line {start_display} is {first_line_size}, exceeds {} limit. Use bash: sed -n '{start_display}p' {path} | head -c {DEFAULT_MAX_BYTES}]",
             format_size(DEFAULT_MAX_BYTES)
         )
     } else if truncation.truncated {
+        details = serde_json::json!({ "truncation": truncation });
         let end_display = start_display + truncation.output_lines.saturating_sub(1);
         let next_offset = end_display + 1;
         let mut out = truncation.content.clone();
@@ -252,9 +267,11 @@ async fn read_file(
 
     AgentToolResult {
         content: vec![text_content(output)],
-        details: serde_json::Value::Null,
+        details,
         usage: None,
         added_tool_names: None,
         terminate: false,
+        is_error: false,
+        structured_content: None,
     }
 }
