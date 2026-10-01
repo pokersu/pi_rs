@@ -3,7 +3,7 @@
 //! 对应上游 `Message = SystemMessage | UserMessage | AssistantMessage | ToolResultMessage`
 //! 与 `utils/transcript.ts` 引入的文本渲染/估算语义。
 
-use std::collections::BTreeMap;
+use indexmap::IndexMap;
 
 use pi_ai::utils::estimate::estimate_message_tokens;
 use pi_ai::{
@@ -32,7 +32,7 @@ fn system_message(content: SystemContent) -> SystemMessage {
 
 #[test]
 fn system_message_serde_round_trip() {
-    let mut sections = BTreeMap::new();
+    let mut sections = IndexMap::new();
     sections.insert("style".to_string(), Some("be concise".to_string()));
     sections.insert("obsolete".to_string(), None);
 
@@ -77,7 +77,7 @@ fn system_content_accepts_string_and_blocks() {
 
 #[test]
 fn get_system_message_text_joins_content_and_non_empty_sections() {
-    let mut sections = BTreeMap::new();
+    let mut sections = IndexMap::new();
     sections.insert("b".to_string(), Some("second".to_string()));
     sections.insert("dropped".to_string(), None);
     sections.insert("empty".to_string(), Some(String::new()));
@@ -96,7 +96,7 @@ fn get_system_message_text_joins_content_and_non_empty_sections() {
 
 #[test]
 fn render_system_message_update_frames_section_changes() {
-    let mut sections = BTreeMap::new();
+    let mut sections = IndexMap::new();
     sections.insert("style".to_string(), Some("terse".to_string()));
     sections.insert("old".to_string(), None);
 

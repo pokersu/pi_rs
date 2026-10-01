@@ -28,6 +28,7 @@
 
 - ✅ **P1 消息模型扩展**（2026-10-01 完成）：`Message::System` / `SystemMessage` / `SystemContent` / `ToolReference`；`AgentMessage::System`；text 渲染函数；estimate / transform_messages / 两个 provider 的 system 分支；新增 8 个测试
 - ⬜ P2 transcript 工具层（`utils/transcript.rs` + `normalizeContext`）
+- ✅ **P2 transcript 工具层**（2026-10-01 完成）：新增 `utils/transcript.rs`（17 个导出）+ `TranscriptContext` 类型 + `sections` 改为 `IndexMap`（保插入序）；新增 10 个测试。**stream 入口切换与 provider 消费并入 P3**。
 - ⬜ P3 工具激活机制迁移（移除 tool-placement 增量，改由 system 消息承载）
 - ⬜ P4 循环钩子 Breaking（`finishTurn` / `prepareRequest` / `peekQueuedMessages`）
 - ⬜ P5 小项（`thinkingLevel` / `onProviderStreamEvent` / image / retry / overflow）

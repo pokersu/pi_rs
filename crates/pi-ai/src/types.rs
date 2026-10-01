@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -402,8 +403,9 @@ pub enum SystemContent {
 pub struct SystemMessage {
     pub content: SystemContent,
     /// 具名、有序的提示分节：首条声明，后续按名替换，`None` 表示删除。
+    /// 用 `IndexMap` 保留插入序（上游为 JS 对象的键序）。
     #[serde(default)]
-    pub sections: Option<BTreeMap<String, Option<String>>>,
+    pub sections: Option<IndexMap<String, Option<String>>>,
     /// 在此点变为可用的工具的完整定义。
     #[serde(default)]
     pub tools_added: Option<Vec<Tool>>,
@@ -537,6 +539,15 @@ pub struct Context {
     pub system_prompt: Option<String>,
     pub messages: Vec<Message>,
     pub tools: Option<Vec<Tool>>,
+}
+
+/// 对应 `TranscriptContext`：已把 `systemPrompt`/`tools` 折叠进 messages 的上下文。
+///
+/// 上游用品牌字段防止把普通 `Context` 误传给 provider；Rust 里类型本身即可区分。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptContext {
+    pub messages: Vec<Message>,
 }
 
 /// 对应 `AssistantMessageEvent`（`AssistantMessageEventStream` 的事件协议）。

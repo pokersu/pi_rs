@@ -36,6 +36,7 @@ pub mod sanitize_unicode;
 #[path = "sleep.rs"]
 pub mod sleep;
 pub mod text;
+pub mod transcript;
 #[path = "typebox-helpers.rs"]
 pub mod typebox_helpers;
 pub mod uuid;

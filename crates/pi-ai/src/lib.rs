@@ -38,6 +38,13 @@ pub use utils::retry::{
 pub use utils::text::{
     ContentTextInput, content_text, get_system_message_text, render_system_message_update,
 };
+pub use utils::transcript::{
+    ToolStateChanges, TranscriptTools, collapse_system_messages, create_initial_system_message,
+    declarations_equal, get_current_system_message, get_current_system_prompt, get_current_tools,
+    get_declared_tools, get_initial_system_message, get_tool_state_changes,
+    has_non_additive_tool_changes, has_tool_redefinitions, normalize_context, resolve_transcript,
+    resolve_transcript_tools, to_tool_declaration, without_initial_system_message,
+};
 pub use utils::typebox_helpers::{StringEnumOptions, string_enum};
 pub use utils::uuid::uuidv7;
 pub use utils::validation::{validate_tool_arguments, validate_tool_call};

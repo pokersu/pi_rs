@@ -88,6 +88,10 @@
     - `transform_messages` 两遍处理对齐：system 与 user 一样原样透传；若存在未结算的 toolCall，则暂存 system 消息、待合成 toolResult 之后再放回。
     - `openai-responses`/`openai-completions` 的 system 分支已接入（首条用 `get_system_message_text`、后续用 `render_system_message_update`；responses 按 `instructionRole` 选择 `developer`/`system`）。**中间 system 消息的 `toolsAdded` 注入（additional_tools / tool_search / Kimi 风格 tools）留待 P3**（需先完成 transcript 层）。
     - 注：`Context.system_prompt` 与新的 system 消息目前**并存**；上游的 `normalizeContext`（把前者折叠成首条 system 消息）由 P2 的 transcript 层引入。
+13. **transcript 工具层（对齐 v0.99.2）**：新增 `utils/transcript.rs`，移植上游 `utils/transcript.ts` 的导出：`createInitialSystemMessage` / `normalizeContext` / `getInitialSystemMessage` / `withoutInitialSystemMessage` / `getCurrentTools` / `getCurrentSystemMessage` / `getCurrentSystemPrompt` / `collapseSystemMessages` / `resolveTranscript` / `toToolDeclaration` / `declarationsEqual` / `getToolStateChanges` / `getDeclaredTools` / `hasToolRedefinitions` / `hasNonAdditiveToolChanges` / `resolveTranscriptTools`，以及 `TranscriptContext` / `ToolStateChanges` / `TranscriptTools`。其职责：把 `Context.systemPrompt`/`tools` 折叠进 transcript、重放中途 system 消息、推导工具增删、拆出「顶层字段 vs 就地追加」的工具体。
+    - 上游函数接受「任意带 role 的消息列表」（agent 层会带自定义角色），只读 `role === "system"` 的项；Rust 版限定为 LLM 层 `Message`（agent 层应先经 `convert_to_llm`）。
+    - `SystemMessage.sections` 由 `BTreeMap` 改为 `IndexMap`（保留插入序，对齐上游 JS 对象键序）；`toToolDeclaration` 在 Rust 下即克隆（强类型 + `Value` 对象键有序，无需上游的 JSON 往返）。
+    - **stream 入口切换到 `normalizeContext`、以及 provider 侧对 transcript 的消费放在 P3**（与工具激活迁移一起做，避免两套 system 逻辑并存）。
 
 ## 阅读步骤
 

@@ -24,7 +24,7 @@ pub fn content_text(content: ContentTextInput<'_>, separator: &str) -> String {
 }
 
 /// `SystemContent` 的文本投影（对应 `contentText(systemMessage.content)`）。
-fn system_content_text(content: &SystemContent) -> String {
+pub fn system_content_text(content: &SystemContent) -> String {
     match content {
         SystemContent::Text(text) => text.clone(),
         SystemContent::Blocks(blocks) => blocks
