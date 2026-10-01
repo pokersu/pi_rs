@@ -936,8 +936,19 @@ fn should_terminate_tool_batch(finalized_calls: &[FinalizedToolCallOutcome]) -> 
 }
 
 /// 对应 `prepareToolCallArguments`（Rust 中 `prepareArguments` 暂不支持，直接返回 toolCall）。
-fn prepare_tool_call_arguments(_tool: &AgentTool, tool_call: &ToolCall) -> ToolCall {
-    tool_call.clone()
+/// 对应 `prepareToolCallArguments`。
+fn prepare_tool_call_arguments(tool: &AgentTool, tool_call: &ToolCall) -> ToolCall {
+    let Some(prepare) = &tool.prepare_arguments else {
+        return tool_call.clone();
+    };
+    let prepared = prepare(tool_call.arguments.clone());
+    if prepared == tool_call.arguments {
+        return tool_call.clone();
+    }
+    ToolCall {
+        arguments: prepared,
+        ..tool_call.clone()
+    }
 }
 
 /// 对应 `RunToolCallOptions`（`ToolCallHooks` + 单次调用上下文）。
@@ -1304,6 +1315,32 @@ mod tests {
         }
     }
 
+    fn agent_tool_with_prepare(
+        prepare: Option<Arc<dyn Fn(serde_json::Value) -> serde_json::Value + Send + Sync>>,
+    ) -> AgentTool {
+        AgentTool {
+            label: "t".into(),
+            tool: tool("t"),
+            execute: Arc::new(|_id, _params, _signal, _on_update| {
+                Box::pin(async { create_error_tool_result("unused") })
+            }),
+            prepare_arguments: prepare,
+            execution_mode: None,
+            replay: None,
+        }
+    }
+
+    fn tool_call(arguments: serde_json::Value) -> ToolCall {
+        ToolCall {
+            kind: pi_ai::ToolCallKind,
+            id: "call-1".into(),
+            name: "t".into(),
+            arguments,
+            thought_signature: None,
+            namespace: None,
+        }
+    }
+
     fn user(text: &str) -> AgentMessage {
         AgentMessage::User(pi_ai::UserMessage {
             content: pi_ai::UserContent::Text(text.into()),
@@ -1344,6 +1381,43 @@ mod tests {
 
         let declared = declare_tool_changes(&[tool("read")], &committed, pending.clone());
         assert_eq!(declared.len(), pending.len(), "无差异时不应插入消息");
+    }
+
+    #[test]
+    fn prepare_tool_call_arguments_applies_prepare_hook() {
+        let t = agent_tool_with_prepare(Some(Arc::new(|mut args: serde_json::Value| {
+            args["normalized"] = serde_json::json!(true);
+            args
+        })));
+        let call = tool_call(serde_json::json!({ "raw": 1 }));
+
+        let out = prepare_tool_call_arguments(&t, &call);
+
+        assert_eq!(
+            out.arguments,
+            serde_json::json!({ "raw": 1, "normalized": true })
+        );
+        assert_eq!(out.id, "call-1", "其余字段应保留");
+    }
+
+    #[test]
+    fn prepare_tool_call_arguments_is_noop_without_hook() {
+        let t = agent_tool_with_prepare(None);
+        let call = tool_call(serde_json::json!({ "raw": 1 }));
+
+        let out = prepare_tool_call_arguments(&t, &call);
+
+        assert_eq!(out.arguments, serde_json::json!({ "raw": 1 }));
+    }
+
+    #[test]
+    fn prepare_tool_call_arguments_keeps_call_when_unchanged() {
+        let t = agent_tool_with_prepare(Some(Arc::new(|args: serde_json::Value| args)));
+        let call = tool_call(serde_json::json!({ "raw": 1 }));
+
+        let out = prepare_tool_call_arguments(&t, &call);
+
+        assert_eq!(out.arguments, call.arguments);
     }
 
     #[test]

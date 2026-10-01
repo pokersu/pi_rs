@@ -9,7 +9,8 @@ use pi_ai::models::Models;
 use serde_json::Value as Json;
 
 use crate::harness::agent_harness::{
-    AgentHarnessApi, AgentLane, Closed, HarnessError, LaneSnapshot, OpenOperation, Resources,
+    AgentHarnessApi, AgentLane, Closed, HarnessError, HarnessFault, LaneSnapshot, OpenOperation,
+    Resources,
 };
 use crate::harness::context::Context;
 use crate::harness::events::{HarnessEventBus, WatchHandler};
@@ -44,7 +45,7 @@ pub struct Harness {
     seed: LaneConfiguration,
     config: Arc<Mutex<Config>>,
     closed_error: Arc<Mutex<Option<String>>>,
-    fault_error: Arc<Mutex<Option<String>>>,
+    fault_error: Arc<Mutex<Option<HarnessFault>>>,
 }
 
 /// 执行 harness fault 的全部副作用并返回 fault 错误文本（对应上游 `fault()`）。
@@ -52,7 +53,7 @@ pub struct Harness {
 /// 幂等：已 fault 或已 close 时直接返回既有错误。顺序对齐上游：
 /// 缓存 faultError → seal 所有 lane → hooks.close → emit fault 事件 → events.close。
 fn apply_fault(
-    fault_error: &Mutex<Option<String>>,
+    fault_error: &Mutex<Option<HarnessFault>>,
     closed_error: &Mutex<Option<String>>,
     lanes: &Mutex<BTreeMap<String, Arc<LaneImpl>>>,
     hooks: &HookRegistry,
@@ -61,13 +62,13 @@ fn apply_fault(
     context: &Context,
 ) -> String {
     if let Some(error) = &*fault_error.lock().unwrap() {
-        return error.clone();
+        return error.message.clone();
     }
     if let Some(error) = &*closed_error.lock().unwrap() {
         return error.clone();
     }
     let fault = format!("AgentHarness storage or invariant fault: {cause}");
-    *fault_error.lock().unwrap() = Some(fault.clone());
+    *fault_error.lock().unwrap() = Some(HarnessFault::new(fault.clone(), Some(cause)));
     for lane in lanes.lock().unwrap().values() {
         lane.seal(fault.clone(), SealReason::Fault);
     }
@@ -89,7 +90,7 @@ fn apply_fault(
 impl Harness {
     fn assert_open(&self) -> Result<(), HarnessError> {
         if let Some(error) = &*self.fault_error.lock().unwrap() {
-            return Err(HarnessError::Closed(Closed::new(error.clone())));
+            return Err(HarnessError::Fault(error.clone()));
         }
         if let Some(error) = &*self.closed_error.lock().unwrap() {
             return Err(HarnessError::Closed(Closed::new(error.clone())));
@@ -99,16 +100,16 @@ impl Harness {
 
     #[allow(clippy::needless_pass_by_value)]
     fn fault(&self, cause: String, context: &Context) -> HarnessError {
-        let fault = apply_fault(
+        let message = apply_fault(
             &self.fault_error,
             &self.closed_error,
             &self.lanes,
             &self.hooks,
             &self.events,
-            cause,
+            cause.clone(),
             context,
         );
-        HarnessError::Closed(Closed::new(fault))
+        HarnessError::Fault(HarnessFault::new(message, Some(cause)))
     }
 
     fn build_lane(&self, name: String, state: LaneRuntimeState) -> Arc<LaneImpl> {

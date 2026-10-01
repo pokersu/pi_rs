@@ -269,6 +269,7 @@ pub fn create_bash_tool(env: Arc<dyn ExecutionEnv>, options: BashToolOptions) ->
             })
         }),
         execution_mode: None,
+        prepare_arguments: None,
         replay: None,
     }
 }

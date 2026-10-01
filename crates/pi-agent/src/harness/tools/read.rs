@@ -88,6 +88,7 @@ pub fn create_read_tool(env: Arc<dyn ExecutionEnv>, options: ReadToolOptions) ->
             })
         }),
         execution_mode: None,
+        prepare_arguments: None,
         replay: None,
     }
 }

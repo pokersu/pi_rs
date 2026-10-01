@@ -33,6 +33,9 @@ crate::tagged_error!(UnknownTarget, "UnknownTarget", { target_id: String, messag
 crate::tagged_error!(InvalidLane, "InvalidLane", { lane: String, reason: String, message: String });
 crate::tagged_error!(NothingToCompact, "NothingToCompact", { lane: String, message: String });
 crate::tagged_error!(Closed, "Closed", { message: String });
+// 对应 `HarnessFault`：storage / invariant 故障（非正常关闭）。
+// 上游的 `cause` 为 `unknown`，这里保留为字符串。
+crate::tagged_error!(HarnessFault, "HarnessFault", { message: String, cause: Option<String> });
 
 /// 对应各错误联合类型（`RunRejected`/`CompactionRejected`/... 等）。
 #[derive(Debug, Clone)]
@@ -50,6 +53,7 @@ pub enum HarnessError {
     UnknownTarget(UnknownTarget),
     InvalidLane(InvalidLane),
     Closed(Closed),
+    Fault(HarnessFault),
 }
 
 macro_rules! harness_error_delegate {
@@ -91,6 +95,7 @@ harness_error_delegate!(
     UnknownTarget,
     InvalidLane,
     Closed,
+    Fault,
 );
 
 /// 对应 `OperationError`

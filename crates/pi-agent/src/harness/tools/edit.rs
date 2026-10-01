@@ -15,6 +15,57 @@ use crate::harness::tools::path_utils::resolve_tool_path;
 use crate::harness::types::ExecutionEnv;
 use crate::types::{AgentTool, AgentToolResult};
 
+/// 对应 `isSingleEditInput`：判断值是否为单个 `{ oldText, newText }` 对象。
+fn is_single_edit_input(value: &serde_json::Value) -> bool {
+    let Some(edit) = value.as_object() else {
+        return false;
+    };
+    edit.get("oldText").is_some_and(|v| v.is_string())
+        && edit.get("newText").is_some_and(|v| v.is_string())
+}
+
+/// 对应 `prepareEditArguments`：把模型给出的原始参数规范化为 `{ path, edits: [...] }`。
+///
+/// 处理三种常见形态：`edits` 为 JSON 字符串、`edits` 为单个 edit 对象、legacy 顶层
+/// `oldText`/`newText`。解析失败时保持原样，交由后续校验报错（与上游一致）。
+fn prepare_edit_arguments(input: serde_json::Value) -> serde_json::Value {
+    let Some(map) = input.as_object() else {
+        return input;
+    };
+    let mut args = map.clone();
+
+    if let Some(edits) = args.get("edits") {
+        if let Some(text) = edits.as_str() {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
+                if parsed.is_array() {
+                    args.insert("edits".to_string(), parsed);
+                } else if is_single_edit_input(&parsed) {
+                    args.insert("edits".to_string(), serde_json::Value::Array(vec![parsed]));
+                }
+            }
+        } else if is_single_edit_input(edits) {
+            let single = edits.clone();
+            args.insert("edits".to_string(), serde_json::Value::Array(vec![single]));
+        }
+    }
+
+    let has_legacy = args.get("oldText").is_some_and(|v| v.is_string())
+        && args.get("newText").is_some_and(|v| v.is_string());
+    if !has_legacy {
+        return serde_json::Value::Object(args);
+    }
+
+    let mut edits = match args.get("edits") {
+        Some(serde_json::Value::Array(items)) => items.clone(),
+        _ => Vec::new(),
+    };
+    let old_text = args.remove("oldText").unwrap_or(serde_json::Value::Null);
+    let new_text = args.remove("newText").unwrap_or(serde_json::Value::Null);
+    edits.push(serde_json::json!({ "oldText": old_text, "newText": new_text }));
+    args.insert("edits".to_string(), serde_json::Value::Array(edits));
+    serde_json::Value::Object(args)
+}
+
 fn validate_edit_input(input: &serde_json::Value) -> (String, Vec<Edit>) {
     let path = input
         .get("path")
@@ -147,6 +198,7 @@ pub fn create_edit_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
 				.await
 			})
 		}),
+		prepare_arguments: Some(Arc::new(prepare_edit_arguments)),
 		execution_mode: None,
 		replay: None,
 	}
@@ -155,3 +207,81 @@ pub fn create_edit_tool(env: Arc<dyn ExecutionEnv>) -> AgentTool {
 // `AbortSignal` 在签名中作为参数类型出现，此引用避免未使用告警。
 #[allow(unused)]
 fn _unused_signal(_: Option<AbortSignal>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn prepare_edit_arguments_parses_json_string_array() {
+        let input = json!({ "path": "a.txt", "edits": "[{\"oldText\":\"a\",\"newText\":\"b\"}]" });
+        let out = prepare_edit_arguments(input);
+        assert_eq!(out["edits"], json!([{ "oldText": "a", "newText": "b" }]));
+    }
+
+    #[test]
+    fn prepare_edit_arguments_parses_json_string_single_object() {
+        let input = json!({ "path": "a.txt", "edits": "{\"oldText\":\"a\",\"newText\":\"b\"}" });
+        let out = prepare_edit_arguments(input);
+        assert_eq!(out["edits"], json!([{ "oldText": "a", "newText": "b" }]));
+    }
+
+    #[test]
+    fn prepare_edit_arguments_wraps_single_object() {
+        let input = json!({ "path": "a.txt", "edits": { "oldText": "a", "newText": "b" } });
+        let out = prepare_edit_arguments(input);
+        assert_eq!(out["edits"], json!([{ "oldText": "a", "newText": "b" }]));
+    }
+
+    #[test]
+    fn prepare_edit_arguments_folds_legacy_top_level_fields() {
+        let input = json!({ "path": "a.txt", "oldText": "a", "newText": "b" });
+        let out = prepare_edit_arguments(input);
+        assert_eq!(out["edits"], json!([{ "oldText": "a", "newText": "b" }]));
+        assert!(out.get("oldText").is_none());
+        assert!(out.get("newText").is_none());
+    }
+
+    #[test]
+    fn prepare_edit_arguments_appends_legacy_after_existing_edits() {
+        let input = json!({
+            "path": "a.txt",
+            "edits": [{ "oldText": "x", "newText": "y" }],
+            "oldText": "a",
+            "newText": "b"
+        });
+        let out = prepare_edit_arguments(input);
+        assert_eq!(
+            out["edits"],
+            json!([
+                { "oldText": "x", "newText": "y" },
+                { "oldText": "a", "newText": "b" }
+            ])
+        );
+    }
+
+    #[test]
+    fn prepare_edit_arguments_keeps_unparsable_string() {
+        let input = json!({ "path": "a.txt", "edits": "not json" });
+        let out = prepare_edit_arguments(input);
+        assert_eq!(out["edits"], json!("not json"));
+    }
+
+    #[test]
+    fn prepare_edit_arguments_passes_through_non_object() {
+        assert_eq!(prepare_edit_arguments(json!("x")), json!("x"));
+        assert_eq!(prepare_edit_arguments(json!(null)), json!(null));
+    }
+
+    #[test]
+    fn prepare_edit_arguments_is_idempotent_for_normal_input() {
+        let input = json!({
+            "path": "a.txt",
+            "edits": [{ "oldText": "a", "newText": "b" }]
+        });
+        let once = prepare_edit_arguments(input.clone());
+        assert_eq!(once, input);
+        assert_eq!(prepare_edit_arguments(once.clone()), once);
+    }
+}

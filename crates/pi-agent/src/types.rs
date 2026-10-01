@@ -198,6 +198,10 @@ pub struct AgentTool {
     pub tool: Tool,
     /// 对应 `execute`
     pub execute: AgentToolExecuteFn,
+    /// 对应 `prepareArguments?: (args: unknown) => Static<TParameters>`。
+    /// 在参数校验前规范化模型给出的原始参数（例如 edit 的 legacy / 字符串形态）。
+    pub prepare_arguments:
+        Option<Arc<dyn Fn(serde_json::Value) -> serde_json::Value + Send + Sync>>,
     /// 对应 `executionMode`
     pub execution_mode: Option<ToolExecutionMode>,
     /// 对应 `replay`：effect 的恢复策略。

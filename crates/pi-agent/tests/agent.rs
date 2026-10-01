@@ -234,6 +234,7 @@ async fn agent_loop_executes_tool_call() {
             })
         }),
         execution_mode: None,
+        prepare_arguments: None,
         replay: None,
     };
 
@@ -431,6 +432,7 @@ async fn stream_without_start_event_keeps_context_intact() {
             })
         }),
         execution_mode: None,
+        prepare_arguments: None,
         replay: None,
     };
 
