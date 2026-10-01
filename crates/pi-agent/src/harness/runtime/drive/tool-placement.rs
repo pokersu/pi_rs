@@ -7,15 +7,14 @@ use std::collections::BTreeMap;
 use pi_ai::{AssistantMessage, ToolResultMessage};
 
 use crate::harness::agent_harness::HarnessEvent;
-use crate::harness::harness_event::ConfigUpdatePayload;
-use crate::harness::runtime::types::{Drive, Lane, LanePatch, LaneRuntimeState, OperationCommand};
+use crate::harness::runtime::types::{Drive, Lane, LanePatch, OperationCommand};
 use crate::harness::session::commit::{insert_entry, insert_usage};
 use crate::harness::session::session::SessionInvariantError;
 use crate::harness::session::types::{
     Continuation, NewEntry, NewMessageEntry, OperationState, ToolBatch, ToolCall, UsageRow, Write,
 };
 use crate::harness::session::values::{
-    branch_tip, delete_value, lane_config, operation_tool_args_prefix, pending_entry, set_value,
+    branch_tip, delete_value, operation_tool_args_prefix, pending_entry, set_value,
 };
 use crate::types::AgentMessage;
 
@@ -305,7 +304,6 @@ async fn commit_placement<L: Lane + ?Sized>(
                 let mut writes: Vec<Write> = Vec::new();
                 let mut parent_id = state.tip_id.clone();
                 let mut completed_calls: Vec<ToolCall> = current.calls.clone();
-                let mut added_names: Vec<String> = Vec::new();
                 let mut event_entries: Vec<(NewEntry, usize)> = Vec::new();
                 let mut event_usage: Vec<(UsageRow, usize)> = Vec::new();
 
@@ -348,11 +346,6 @@ async fn commit_placement<L: Lane + ?Sized>(
                         writes.push(insert_usage(row));
                     }
 
-                    for name in item.message.added_tool_names.clone().unwrap_or_default() {
-                        if !next_config_contains(&state, &added_names, &name) {
-                            added_names.push(name);
-                        }
-                    }
                     parent_id = Some(item.call.result_entry_id());
 
                     for call in &mut completed_calls {
@@ -378,19 +371,8 @@ async fn commit_placement<L: Lane + ?Sized>(
                 let complete = completed_calls
                     .iter()
                     .all(|call| matches!(call, ToolCall::Completed { .. }));
-                let mut next_configuration = state.configuration.clone();
-                if !added_names.is_empty() {
-                    for name in &added_names {
-                        if !next_configuration.active_tool_names.contains(name) {
-                            next_configuration.active_tool_names.push(name.clone());
-                        }
-                    }
-                    writes.push(Write::Value(set_value(
-                        &lane_config(&lane_name),
-                        serde_json::to_value(&next_configuration)
-                            .unwrap_or(serde_json::Value::Null),
-                    )));
-                }
+                // 工具装载变化不再写回 lane config：改由 transcript 的 system 消息承载
+                //（对齐上游 v0.99.2：`tool-placement` 只负责结果放置与分支 tip 推进）。
                 writes.push(Write::Value(set_value(
                     &branch_tip(&lane_name),
                     serde_json::json!(parent_id),
@@ -444,14 +426,12 @@ async fn commit_placement<L: Lane + ?Sized>(
 
                 let record_complete = complete;
                 let lane_name_events = lane_name.clone();
-                let previous_tools = state.configuration.active_tool_names.clone();
-                let value_tools = next_configuration.active_tool_names.clone();
                 OperationCommand::Commit {
                     writes,
                     operation_state: next_run,
                     lane: Some(LanePatch {
                         tip_id: parent_id.clone(),
-                        configuration: Some(next_configuration.clone()),
+                        configuration: Some(state.configuration.clone()),
                         inbox: None,
                     }),
                     materialize: Box::new(move |_| record_complete),
@@ -483,16 +463,6 @@ async fn commit_placement<L: Lane + ?Sized>(
                                 });
                             }
                         }
-                        if !added_names.is_empty() {
-                            events.push(HarnessEvent::ConfigUpdate {
-                                lane: Some(lane_name_events.clone()),
-                                payload: ConfigUpdatePayload::ActiveTools {
-                                    value: value_tools.clone(),
-                                    previous: previous_tools.clone(),
-                                },
-                                recovery: None,
-                            });
-                        }
                         events
                     })),
                 }
@@ -501,14 +471,6 @@ async fn commit_placement<L: Lane + ?Sized>(
         &drive.context,
     )
     .await
-}
-
-fn next_config_contains(state: &LaneRuntimeState, added: &[String], name: &str) -> bool {
-    state
-        .configuration
-        .active_tool_names
-        .contains(&name.to_string())
-        || added.contains(&name.to_string())
 }
 
 /// 对应 `materializeReady`。

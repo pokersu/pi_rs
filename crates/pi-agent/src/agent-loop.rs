@@ -9,8 +9,9 @@ use std::sync::Arc;
 use futures::{FutureExt, StreamExt};
 use pi_ai::{
     AbortSignal, AssistantMessage, AssistantMessageEvent, ContentBlock, Context, EventStream,
-    StopReason, TextContent, TextKind, TextOrImageContent, ToolCall, ToolResultMessage,
-    validate_tool_arguments,
+    StopReason, SystemContent, SystemMessage, TextContent, TextKind, TextOrImageContent, Tool,
+    ToolCall, ToolResultMessage, ToolStateChanges, create_initial_system_message,
+    get_current_tools, get_tool_state_changes, to_tool_declaration, validate_tool_arguments,
 };
 
 use crate::types::{
@@ -115,6 +116,143 @@ pub fn agent_loop_continue(
     stream
 }
 
+/// 取上下文里可执行工具的 LLM 层声明（`AgentTool` → `Tool`）。
+fn executable_tools(context: &AgentContext) -> Vec<Tool> {
+    context
+        .tools
+        .as_ref()
+        .map(|tools| tools.iter().map(|tool| tool.tool.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// 取消息列表中 system 消息声明的当前工具集（对应 `getCurrentTools`）。
+///
+/// 上游的 helper 接受「任意带 role 的消息列表」；Rust 侧先抽出 system 消息再交给 transcript 函数，
+/// 因为那些函数只读 `role == "system"` 的项（自定义角色消息不影响结果）。
+fn declared_tools(messages: &[AgentMessage]) -> Vec<Tool> {
+    let system_messages: Vec<pi_ai::Message> = messages
+        .iter()
+        .filter_map(|message| match message {
+            AgentMessage::System(system) => Some(pi_ai::Message::System(system.clone())),
+            _ => None,
+        })
+        .collect();
+    get_current_tools(&system_messages)
+}
+
+/// 对应 `withToolChanges`：复制 system 消息，工具字段替换为 `changes`（空列表则省略字段）。
+fn with_tool_changes(message: &SystemMessage, changes: &ToolStateChanges) -> SystemMessage {
+    SystemMessage {
+        content: message.content.clone(),
+        sections: message.sections.clone(),
+        tools_added: if changes.tools_added.is_empty() {
+            None
+        } else {
+            Some(changes.tools_added.clone())
+        },
+        tools_removed: if changes.tools_removed.is_empty() {
+            None
+        } else {
+            Some(changes.tools_removed.clone())
+        },
+        timestamp: message.timestamp,
+    }
+}
+
+/// 对应 `declareToolChanges`：把「可执行工具集」与 transcript 已声明工具的差异声明给模型。
+///
+/// `executable` 是运行时能执行的工具；transcript 的 system 消息声明模型可以调用的工具。
+/// 每次请求前两者之差成为 system 消息上的 `toolsAdded` / `toolsRemoved`，保证重放 transcript
+/// 后的工具集恰好等于 `executable`。若 pending 已存在 system 消息，其工具字段被当作「意图」，
+/// 用「已提交 transcript 与可执行集之差」替换；否则在首个非 system 消息前插入新 system 消息。
+fn declare_tool_changes(
+    executable: &[Tool],
+    committed: &[AgentMessage],
+    pending_messages: Vec<AgentMessage>,
+) -> Vec<AgentMessage> {
+    let system_index = pending_messages
+        .iter()
+        .rposition(|message| matches!(message, AgentMessage::System(_)));
+    let pending_system = system_index.and_then(|index| match &pending_messages[index] {
+        AgentMessage::System(system) => Some(system.clone()),
+        _ => None,
+    });
+
+    // pending 的 system 消息若带工具字段，先视为意图清空，再参与基线计算。
+    let baseline: Vec<AgentMessage> = match (system_index, &pending_system) {
+        (Some(index), Some(system)) => {
+            let no_changes = ToolStateChanges {
+                tools_added: Vec::new(),
+                tools_removed: Vec::new(),
+            };
+            let mut cleared = pending_messages.clone();
+            cleared[index] = AgentMessage::System(with_tool_changes(system, &no_changes));
+            cleared
+        }
+        _ => pending_messages.clone(),
+    };
+
+    let mut declared_sources: Vec<AgentMessage> = committed.to_vec();
+    declared_sources.extend(baseline.iter().cloned());
+    let current: Vec<Tool> = executable.iter().map(to_tool_declaration).collect();
+    let changes = get_tool_state_changes(&declared_tools(&declared_sources), &current);
+    let unchanged = changes.tools_added.is_empty() && changes.tools_removed.is_empty();
+
+    if let (Some(index), Some(system)) = (system_index, &pending_system) {
+        let pending_has_tools = system.tools_added.as_ref().is_some_and(|t| !t.is_empty())
+            || system.tools_removed.as_ref().is_some_and(|t| !t.is_empty());
+        if unchanged && !pending_has_tools {
+            return pending_messages;
+        }
+        let mut updated = baseline;
+        updated[index] = AgentMessage::System(with_tool_changes(system, &changes));
+        return updated;
+    }
+
+    if unchanged {
+        return pending_messages;
+    }
+
+    let update = with_tool_changes(
+        &SystemMessage {
+            content: SystemContent::Text(String::new()),
+            sections: None,
+            tools_added: None,
+            tools_removed: None,
+            timestamp: pi_ai::utils::uuid::now_ms() as u64,
+        },
+        &changes,
+    );
+    let insert_index = pending_messages
+        .iter()
+        .position(|message| !matches!(message, AgentMessage::System(_)))
+        .unwrap_or(pending_messages.len());
+    let mut result = pending_messages;
+    result.insert(insert_index, AgentMessage::System(update));
+    result
+}
+
+/// 把 `context.system_prompt` / `context.tools` 折叠成首条 system 消息。
+///
+/// 对应上游在 agent 层表达的 `createInitialSystemMessage` + `normalizeContext`：
+/// 折叠后 `system_prompt` 置空，使 provider 侧不会重复生成首条 system 消息。
+fn fold_initial_system_message(context: &mut AgentContext) {
+    if matches!(context.messages.first(), Some(AgentMessage::System(_))) {
+        return;
+    }
+    let tools = executable_tools(context);
+    let system_prompt = if context.system_prompt.is_empty() {
+        None
+    } else {
+        Some(context.system_prompt.as_str())
+    };
+    let Some(initial) = create_initial_system_message(system_prompt, Some(&tools)) else {
+        return;
+    };
+    context.messages.insert(0, AgentMessage::System(initial));
+    context.system_prompt.clear();
+}
+
 /// 对应 `runAgentLoop`
 pub async fn run_agent_loop(
     prompts: Vec<AgentMessage>,
@@ -130,6 +268,8 @@ pub async fn run_agent_loop(
         messages: [context.messages.clone(), prompts.clone()].concat(),
         tools: context.tools.clone(),
     };
+    // 把 systemPrompt/tools 折叠进 transcript（首条 system 消息）。
+    fold_initial_system_message(&mut current_context);
 
     emit(AgentEvent::AgentStart).await;
     emit(AgentEvent::TurnStart).await;
@@ -233,10 +373,13 @@ async fn run_loop(
                 emit(AgentEvent::TurnStart).await;
             }
 
-            // 注入 pending 消息。
+            // 注入 pending 消息（先声明工具装载变化）。
             if !pending_messages.is_empty() {
                 let drained: Vec<AgentMessage> = std::mem::take(&mut pending_messages);
-                for message in drained {
+                let executable = executable_tools(current_context);
+                let declared =
+                    declare_tool_changes(&executable, &current_context.messages, drained);
+                for message in declared {
                     emit(AgentEvent::MessageStart {
                         message: message.clone(),
                     })
@@ -992,4 +1135,133 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
         return (*s).to_string();
     }
     "tool execution failed".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool(name: &str) -> Tool {
+        Tool {
+            name: name.into(),
+            description: format!("{name} tool"),
+            parameters: serde_json::json!({ "type": "object", "properties": {} }),
+            constrained_sampling: None,
+        }
+    }
+
+    fn user(text: &str) -> AgentMessage {
+        AgentMessage::User(pi_ai::UserMessage {
+            content: pi_ai::UserContent::Text(text.into()),
+            timestamp: 1,
+        })
+    }
+
+    fn system_with_tools(content: &str, tools_added: Vec<Tool>) -> AgentMessage {
+        AgentMessage::System(SystemMessage {
+            content: SystemContent::Text(content.into()),
+            sections: None,
+            tools_added: Some(tools_added),
+            tools_removed: None,
+            timestamp: 0,
+        })
+    }
+
+    #[test]
+    fn declare_tool_changes_inserts_system_message_for_new_tools() {
+        let declared = declare_tool_changes(&[tool("read")], &[], vec![user("hi")]);
+
+        assert_eq!(declared.len(), 2, "应在首个非 system 消息前插入声明");
+        match &declared[0] {
+            AgentMessage::System(system) => {
+                assert_eq!(system.content, SystemContent::Text(String::new()));
+                let added = system.tools_added.as_ref().expect("tools_added");
+                assert_eq!(added.len(), 1);
+                assert_eq!(added[0].name, "read");
+            }
+            other => panic!("expected injected system message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn declare_tool_changes_is_noop_when_transcript_matches() {
+        let committed = vec![system_with_tools("base", vec![tool("read")])];
+        let pending = vec![user("hi")];
+
+        let declared = declare_tool_changes(&[tool("read")], &committed, pending.clone());
+        assert_eq!(declared.len(), pending.len(), "无差异时不应插入消息");
+    }
+
+    #[test]
+    fn declare_tool_changes_declares_removals() {
+        let committed = vec![system_with_tools("base", vec![tool("read"), tool("write")])];
+
+        let declared = declare_tool_changes(&[tool("read")], &committed, vec![user("hi")]);
+        let injected = declared
+            .iter()
+            .find_map(|message| match message {
+                AgentMessage::System(system) if system.tools_removed.is_some() => Some(system),
+                _ => None,
+            })
+            .expect("应声明被移除的工具");
+        let removed = injected.tools_removed.as_ref().unwrap();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].name, "write");
+    }
+
+    #[test]
+    fn declare_tool_changes_reuses_pending_system_message() {
+        // pending 已有 system 消息时，工具差异写入它（而不是新增一条）。
+        let pending = vec![system_with_tools("", vec![]), user("hi")];
+
+        let declared = declare_tool_changes(&[tool("read")], &[], pending);
+        assert_eq!(declared.len(), 2);
+        match &declared[0] {
+            AgentMessage::System(system) => {
+                assert_eq!(system.tools_added.as_ref().map(Vec::len), Some(1));
+            }
+            other => panic!("expected pending system message to carry changes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fold_initial_system_message_creates_leading_system_message() {
+        let mut context = AgentContext {
+            system_prompt: "be nice".into(),
+            messages: vec![user("hi")],
+            tools: None,
+        };
+
+        fold_initial_system_message(&mut context);
+
+        assert!(matches!(
+            context.messages.first(),
+            Some(AgentMessage::System(_))
+        ));
+        assert!(context.system_prompt.is_empty(), "折叠后字段应清空");
+        match &context.messages[0] {
+            AgentMessage::System(system) => {
+                assert_eq!(system.content, SystemContent::Text("be nice".into()));
+            }
+            other => panic!("expected system message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fold_initial_system_message_is_idempotent() {
+        let mut context = AgentContext {
+            system_prompt: "be nice".into(),
+            messages: vec![user("hi")],
+            tools: None,
+        };
+        fold_initial_system_message(&mut context);
+        let len_after_first = context.messages.len();
+
+        fold_initial_system_message(&mut context);
+        assert_eq!(
+            context.messages.len(),
+            len_after_first,
+            "已有首条 system 消息时不重复插入"
+        );
+    }
 }

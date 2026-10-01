@@ -30,7 +30,7 @@
 - ⬜ P2 transcript 工具层（`utils/transcript.rs` + `normalizeContext`）
 - ✅ **P2 transcript 工具层**（2026-10-01 完成）：新增 `utils/transcript.rs`（17 个导出）+ `TranscriptContext` 类型 + `sections` 改为 `IndexMap`（保插入序）；新增 10 个测试。**stream 入口切换与 provider 消费并入 P3**。
 - ✅ **P3a provider 侧接入 transcript**（2026-10-01 完成）：`openai-responses` / `openai-completions` 改为 `normalize_context` → `resolve_transcript` → `resolve_transcript_tools`；删除内联 `split_deferred_tools`，新增 `append_system_tool_additions`（非首条 system 的 `toolsAdded` → `additional_tools` / `tool_search`）；completions 引入 `instructionRole` 与 Kimi 风格 `system+tools`；`namespace` 回放改为只看 `is_same_model`（对齐上游）；`Compat` 新增 `supportsMidConvoSystemMessages`。3 个新测试。
-- ⬜ P3b agent-loop 侧：`declareToolChanges`（工具差异 → system 消息）+ 初始 system 消息 + 移除 `tool-placement` 的 `activeToolNames` 增量
+- ✅ **P3b agent-loop 侧**（2026-10-01 完成）：`agent-loop.rs` 新增 `declare_tool_changes`（把可执行工具集与 transcript 声明之差写成 system 消息的 `toolsAdded`/`toolsRemoved`）+ `with_tool_changes` / `declared_tools` / `executable_tools`；`fold_initial_system_message` 把 `systemPrompt`+`tools` 折叠为首条 system 消息（字段清空）；在 `run_agent_loop` 入口与 `run_loop` 每轮 pending 注入前接入。`drive/tool-placement.rs` 移除 `activeToolNames` 自动增量写回与 `ConfigUpdate::ActiveTools` 事件（工具激活改为显式：`setActiveTools` / 调用方更新工具集，装载变化由 transcript 承载）。7 个新测试。
 - ⬜ P4 循环钩子 Breaking（`finishTurn` / `prepareRequest` / `peekQueuedMessages`）
 - ⬜ P5 小项（`thinkingLevel` / `onProviderStreamEvent` / image / retry / overflow）
 - ⬜ P6 telemetry
