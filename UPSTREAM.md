@@ -29,7 +29,8 @@
 - ✅ **P1 消息模型扩展**（2026-10-01 完成）：`Message::System` / `SystemMessage` / `SystemContent` / `ToolReference`；`AgentMessage::System`；text 渲染函数；estimate / transform_messages / 两个 provider 的 system 分支；新增 8 个测试
 - ⬜ P2 transcript 工具层（`utils/transcript.rs` + `normalizeContext`）
 - ✅ **P2 transcript 工具层**（2026-10-01 完成）：新增 `utils/transcript.rs`（17 个导出）+ `TranscriptContext` 类型 + `sections` 改为 `IndexMap`（保插入序）；新增 10 个测试。**stream 入口切换与 provider 消费并入 P3**。
-- ⬜ P3 工具激活机制迁移（移除 tool-placement 增量，改由 system 消息承载）
+- ✅ **P3a provider 侧接入 transcript**（2026-10-01 完成）：`openai-responses` / `openai-completions` 改为 `normalize_context` → `resolve_transcript` → `resolve_transcript_tools`；删除内联 `split_deferred_tools`，新增 `append_system_tool_additions`（非首条 system 的 `toolsAdded` → `additional_tools` / `tool_search`）；completions 引入 `instructionRole` 与 Kimi 风格 `system+tools`；`namespace` 回放改为只看 `is_same_model`（对齐上游）；`Compat` 新增 `supportsMidConvoSystemMessages`。3 个新测试。
+- ⬜ P3b agent-loop 侧：`declareToolChanges`（工具差异 → system 消息）+ 初始 system 消息 + 移除 `tool-placement` 的 `activeToolNames` 增量
 - ⬜ P4 循环钩子 Breaking（`finishTurn` / `prepareRequest` / `peekQueuedMessages`）
 - ⬜ P5 小项（`thinkingLevel` / `onProviderStreamEvent` / image / retry / overflow）
 - ⬜ P6 telemetry

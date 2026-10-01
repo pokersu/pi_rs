@@ -10,27 +10,53 @@ use serde_json::{Value, json};
 
 use crate::providers::faux::stream_with_deltas;
 use crate::types::{
-    AssistantMessage, AssistantMessageEvent, ContentBlock, Context, ErrorStopReason, Model,
-    SimpleStreamOptions, StopReason, StreamFunction, TextContent, TextKind, ToolCall,
+    AssistantMessage, AssistantMessageEvent, ContentBlock, Context, ErrorStopReason, Message,
+    Model, SimpleStreamOptions, StopReason, StreamFunction, TextContent, TextKind, Tool, ToolCall,
 };
 use crate::utils::error_stream::{create_error_message, default_usage};
 use crate::utils::event_stream::create_assistant_message_event_stream;
 use crate::utils::json_parse::parse_streaming_json;
 
-/// 对应 `convertMessages`（简化：仅基础 text/image/tool_call 转换）。
-fn build_messages(context: &Context) -> Vec<Value> {
-    let mut messages = Vec::new();
-    if let Some(system) = &context.system_prompt
-        && !system.is_empty()
-    {
-        messages.push(json!({ "role": "system", "content": system }));
+/// 对应 `OpenAICompletionsCompat`（completions 侧需要的子集）。
+struct Compat {
+    supports_developer_role: bool,
+    supports_mid_convo_system_messages: bool,
+    supports_mid_convo_tool_additions: bool,
+}
+
+/// 对应 `getCompat`（completions 子集）。
+fn get_compat(model: &Model) -> Compat {
+    let compat = model.compat.as_ref().and_then(|c| c.as_object());
+    let get_bool = |key: &str, default: bool| {
+        compat
+            .and_then(|c| c.get(key))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(default)
+    };
+    Compat {
+        supports_developer_role: get_bool("supportsDeveloperRole", true),
+        supports_mid_convo_system_messages: get_bool("supportsMidConvoSystemMessages", false),
+        supports_mid_convo_tool_additions: get_bool("supportsMidConvoToolAdditions", false),
     }
-    for (msg_index, msg) in context.messages.iter().enumerate() {
+}
+
+/// 对应 `convertMessages`（简化：仅基础 text/image/tool_call 转换）。
+fn build_messages(
+    raw_messages: &[Message],
+    instruction_role: &str,
+    transcript_tools: &crate::utils::transcript::TranscriptTools,
+) -> Vec<Value> {
+    let mut messages = Vec::new();
+    for (msg_index, msg) in raw_messages.iter().enumerate() {
         match msg {
             crate::types::Message::System(system) => {
-                // 首条 system 消息是 base prompt；后续为中途更新。
-                // TODO(P3)：i > 0 且 `anchorsAdditions` 时注入 toolsAdded（Kimi 风格 system+tools），
-                //            并按上游引入 instructionRole（developer/system）。
+                // i > 0 且传输层支持锚定追加时，就地声明 toolsAdded（Kimi 风格 system+tools）。
+                if msg_index > 0 && transcript_tools.anchors_additions {
+                    let added = system.tools_added.as_deref().unwrap_or(&[]);
+                    if !added.is_empty() {
+                        messages.push(json!({ "role": "system", "tools": build_tools(added) }));
+                    }
+                }
                 let text = if msg_index == 0 {
                     crate::utils::text::get_system_message_text(system)
                 } else {
@@ -38,7 +64,7 @@ fn build_messages(context: &Context) -> Vec<Value> {
                 };
                 if !text.is_empty() {
                     messages.push(json!({
-                        "role": "system",
+                        "role": instruction_role,
                         "content": crate::utils::sanitize_unicode::sanitize_surrogates(&text)
                     }));
                 }
@@ -113,36 +139,49 @@ fn build_messages(context: &Context) -> Vec<Value> {
 }
 
 /// 对应 `convertTools`（简化）。
-fn build_tools(context: &Context) -> Option<Vec<Value>> {
-    context.tools.as_ref().map(|tools| {
-        tools
-            .iter()
-            .map(|t| {
-                json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    }
-                })
+fn build_tools(tools: &[Tool]) -> Vec<Value> {
+    tools
+        .iter()
+        .map(|t| {
+            json!({
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.parameters,
+                }
             })
-            .collect()
-    })
+        })
+        .collect()
 }
 
 /// 对应 `buildParams`（简化）。
 fn build_body(model: &Model, context: &Context, options: Option<&SimpleStreamOptions>) -> Value {
+    let compat = get_compat(model);
+    // 归一化：把 `Context.systemPrompt`/`tools` 折叠进 transcript。
+    let transcript = crate::utils::transcript::normalize_context(context);
+    let normalized = crate::utils::transcript::resolve_transcript(
+        transcript,
+        Some(compat.supports_mid_convo_system_messages),
+    );
+    let transcript_tools = crate::utils::transcript::resolve_transcript_tools(
+        &normalized.messages,
+        compat.supports_mid_convo_system_messages && compat.supports_mid_convo_tool_additions,
+    );
+    let instruction_role = if model.reasoning && compat.supports_developer_role {
+        "developer"
+    } else {
+        "system"
+    };
+
     let mut body = json!({
         "model": model.id,
-        "messages": build_messages(context),
+        "messages": build_messages(&normalized.messages, instruction_role, &transcript_tools),
         "stream": true,
         "stream_options": { "include_usage": true },
     });
-    if let Some(tools) = build_tools(context)
-        && !tools.is_empty()
-    {
-        body["tools"] = json!(tools);
+    if !transcript_tools.request_tools.is_empty() {
+        body["tools"] = json!(build_tools(&transcript_tools.request_tools));
     }
     if let Some(options) = options {
         if let Some(max_tokens) = options.stream.max_tokens {

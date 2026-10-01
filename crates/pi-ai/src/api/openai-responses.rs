@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::types::{
     AssistantMessage, AssistantMessageEvent, CacheRetention, ContentBlock, Context,
-    ErrorStopReason, ImageContent, InputModality, Model, SimpleStreamOptions, StopReason,
+    ErrorStopReason, ImageContent, InputModality, Message, Model, SimpleStreamOptions, StopReason,
     StreamFunction, TerminalStopReason, TextContent, TextKind, TextOrImageContent, Tool, ToolCall,
     ToolCallKind, Usage,
 };
@@ -29,6 +29,8 @@ struct Compat {
     supports_openai_grammar_tools: bool,
     supports_additional_tools: bool,
     supports_tool_search: bool,
+    /// 对应 `supportsMidConvoSystemMessages`：模型是否接受中途插入的 system 消息。
+    supports_mid_convo_system_messages: bool,
     supports_explicit_prompt_cache_mode: bool,
     supports_max_output_tokens: bool,
 }
@@ -54,6 +56,7 @@ fn get_compat(model: &Model) -> Compat {
         supports_openai_grammar_tools: get_bool("supportsOpenAIGrammarTools", false),
         supports_additional_tools: get_bool("supportsAdditionalTools", false),
         supports_tool_search: get_bool("supportsToolSearch", false),
+        supports_mid_convo_system_messages: get_bool("supportsMidConvoSystemMessages", false),
         supports_explicit_prompt_cache_mode: get_bool("supportsExplicitPromptCacheMode", false),
         supports_max_output_tokens: get_bool("supportsMaxOutputTokens", true),
     }
@@ -148,50 +151,59 @@ fn apply_service_tier_pricing(usage: &mut Usage, service_tier: Option<&str>, mod
         usage.cost.input + usage.cost.output + usage.cost.cache_read + usage.cost.cache_write;
 }
 
-/// 对应 `splitDeferredTools`：把工具分成立即发送与延迟加载两组。
-fn split_deferred_tools(context: &Context, enabled: bool) -> (Vec<Tool>, HashMap<String, Tool>) {
-    let mut unique: HashMap<String, Tool> = HashMap::new();
-    for tool in context.tools.as_deref().unwrap_or(&[]) {
-        unique
-            .entry(tool.name.clone())
-            .or_insert_with(|| tool.clone());
+/// 对应 `appendSystemToolAdditions`：把中途 system 消息声明的 `toolsAdded` 注入为就地追加。
+///
+/// `additional-tools` 用 `additional_tools`（developer role）；`tool-search` 用客户端执行的
+/// `tool_search_call` + `tool_search_output` 对。
+fn append_system_tool_additions(
+    items: &mut Vec<Value>,
+    system: &crate::types::SystemMessage,
+    compat: &Compat,
+    deferred_tools_mode: Option<&str>,
+    loaded_names: &mut std::collections::HashSet<String>,
+) {
+    let tools: Vec<Tool> = system
+        .tools_added
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .filter(|tool| loaded_names.insert(tool.name.clone()))
+        .cloned()
+        .collect();
+    if tools.is_empty() {
+        return;
     }
-    if !enabled {
-        return (unique.into_values().collect(), HashMap::new());
-    }
-
-    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut deferred_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for message in &context.messages {
-        match message {
-            crate::types::Message::Assistant(a) => {
-                for block in &a.content {
-                    if let ContentBlock::ToolCall(tc) = block {
-                        used.insert(tc.name.clone());
-                    }
-                }
-            }
-            crate::types::Message::ToolResult(r) => {
-                for name in r.added_tool_names.as_deref().unwrap_or(&[]) {
-                    if !used.contains(name) {
-                        deferred_names.insert(name.clone());
-                    }
-                }
-            }
-            _ => {}
+    match deferred_tools_mode {
+        Some("additional-tools") => {
+            items.push(json!({
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": convert_tools(&tools, compat)
+            }));
         }
-    }
-
-    let mut immediate = Vec::new();
-    let mut deferred = HashMap::new();
-    for (name, tool) in unique {
-        if deferred_names.contains(&name) {
-            deferred.insert(name, tool);
-        } else {
-            immediate.push(tool);
+        Some("tool-search") => {
+            let names: Vec<String> = tools.iter().map(|tool| tool.name.clone()).collect();
+            let call_id = format!(
+                "pi_tool_load_{}",
+                crate::utils::hash::short_hash(&names.join(","))
+            );
+            items.push(json!({
+                "type": "tool_search_call",
+                "call_id": call_id,
+                "execution": "client",
+                "status": "completed",
+                "arguments": { "query": names.join(" "), "limit": names.len() }
+            }));
+            items.push(json!({
+                "type": "tool_search_output",
+                "call_id": call_id,
+                "execution": "client",
+                "status": "completed",
+                "tools": convert_tools(&tools, compat)
+            }));
         }
+        _ => {}
     }
-    (immediate, deferred)
 }
 
 /// 对应 `OPENAI_TOOL_CALL_PROVIDERS`。
@@ -322,17 +334,16 @@ fn convert_tool_result_output(model: &Model, content: &[TextOrImageContent]) -> 
 
 /// 对应 `convertMessages`（system/user/assistant/toolResult → responses input，含延迟工具加载）。
 fn convert_messages(
-    context: &Context,
+    messages: &[Message],
     model: &Model,
     compat: &Compat,
-    deferred_tools: &HashMap<String, Tool>,
     deferred_tools_mode: Option<&str>,
     grammar_properties: &HashMap<String, String>,
 ) -> Vec<Value> {
     let mut items: Vec<Value> = Vec::new();
     let mut loaded_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     let normalized_messages = crate::api::transform_messages::transform_messages(
-        &context.messages,
+        messages,
         model,
         Some(&normalize_tool_call_id),
     );
@@ -344,18 +355,20 @@ fn convert_messages(
         "system"
     };
 
-    if let Some(system) = &context.system_prompt
-        && !system.is_empty()
-    {
-        items.push(json!({ "role": instruction_role, "content": system }));
-    }
-
     for (msg_index, msg) in normalized_messages.iter().enumerate() {
         match msg {
             crate::types::Message::System(system) => {
+                // 非首条 system 消息携带的 `toolsAdded` 作为就地追加注入。
+                if msg_index > 0 {
+                    append_system_tool_additions(
+                        &mut items,
+                        system,
+                        compat,
+                        deferred_tools_mode,
+                        &mut loaded_names,
+                    );
+                }
                 // 首条 system 消息是 base prompt；后续为中途更新。
-                // TODO(P3)：非首条且 provider 支持时，先把 toolsAdded 注入为
-                //            additional_tools / tool_search 项（对应 appendSystemToolAdditions）。
                 let text = if msg_index == 0 {
                     crate::utils::text::get_system_message_text(system)
                 } else {
@@ -454,8 +467,8 @@ fn convert_messages(
                             {
                                 item_id = None;
                             }
-                            let can_replay_namespace =
-                                is_same_model || deferred_tools.contains_key(&tc.name);
+                            // 对应上游：仅在同一个模型时回放 namespace（不再依赖延迟工具表）。
+                            let can_replay_namespace = is_same_model;
                             if let Some(input_property) = custom_input_property {
                                 let input =
                                     crate::api::constrained_sampling::get_grammar_tool_input(
@@ -518,42 +531,7 @@ fn convert_messages(
                     }));
                 }
 
-                // 延迟加载的工具（additional-tools / tool-search）。
-                let mut loaded: Vec<Tool> = Vec::new();
-                for name in r.added_tool_names.as_deref().unwrap_or(&[]) {
-                    if let Some(tool) = deferred_tools.get(name)
-                        && loaded_names.insert(name.clone())
-                    {
-                        loaded.push(tool.clone());
-                    }
-                }
-                if !loaded.is_empty() && deferred_tools_mode == Some("additional-tools") {
-                    items.push(json!({
-                        "type": "additional_tools",
-                        "role": "developer",
-                        "tools": convert_tools(&loaded, compat)
-                    }));
-                } else if !loaded.is_empty() && deferred_tools_mode == Some("tool-search") {
-                    let names: Vec<String> = loaded.iter().map(|t| t.name.clone()).collect();
-                    let search_call_id = format!(
-                        "pi_tool_load_{}",
-                        crate::utils::hash::short_hash(&format!("{call_id}:{}", names.join(",")))
-                    );
-                    items.push(json!({
-                        "type": "tool_search_call",
-                        "call_id": search_call_id,
-                        "execution": "client",
-                        "status": "completed",
-                        "arguments": { "query": names.join(" "), "limit": names.len() }
-                    }));
-                    items.push(json!({
-                        "type": "tool_search_output",
-                        "call_id": search_call_id,
-                        "execution": "client",
-                        "status": "completed",
-                        "tools": convert_tools(&loaded, compat)
-                    }));
-                }
+                // 工具追加现已由 system 消息的 `toolsAdded` 承载（见 `append_system_tool_additions`）。
             }
         }
     }
@@ -611,20 +589,29 @@ fn build_body(model: &Model, context: &Context, options: Option<&SimpleStreamOpt
     } else {
         None
     };
-    let (immediate_tools, deferred_tools) =
-        split_deferred_tools(context, deferred_tools_mode.is_some());
+    // 归一化：把 `Context.systemPrompt`/`tools` 折叠进 transcript（对应 `normalizeContext`）。
+    // 模型不支持中途 system 消息时折叠为单条（对应 `resolveTranscript`）。
+    let transcript = crate::utils::transcript::normalize_context(context);
+    let normalized = crate::utils::transcript::resolve_transcript(
+        transcript,
+        Some(compat.supports_mid_convo_system_messages),
+    );
+    // 工具拆分：支持就地追加时顶层只放初始工具，其余由 system 消息承载。
+    let transcript_tools = crate::utils::transcript::resolve_transcript_tools(
+        &normalized.messages,
+        compat.supports_additional_tools || compat.supports_tool_search,
+    );
     let grammar_properties = crate::api::constrained_sampling::create_grammar_tool_input_properties(
-        context.tools.as_deref(),
+        Some(&transcript_tools.request_tools),
         compat.supports_openai_grammar_tools,
     );
 
     let mut body = json!({
         "model": model.id,
         "input": convert_messages(
-            context,
+            &normalized.messages,
             model,
             &compat,
-            &deferred_tools,
             deferred_tools_mode,
             &grammar_properties,
         ),
@@ -670,8 +657,8 @@ fn build_body(model: &Model, context: &Context, options: Option<&SimpleStreamOpt
         }
     }
 
-    if !immediate_tools.is_empty() {
-        body["tools"] = json!(convert_tools(&immediate_tools, &compat));
+    if !transcript_tools.request_tools.is_empty() {
+        body["tools"] = json!(convert_tools(&transcript_tools.request_tools, &compat));
     }
 
     body
@@ -1486,21 +1473,110 @@ mod tests {
     fn convert_and_dump(messages: Vec<Message>) -> Vec<Value> {
         let model = make_model();
         let compat = get_compat(&model);
-        let context = Context {
-            system_prompt: None,
-            messages,
-            tools: None,
-        };
-        let items = convert_messages(
-            &context,
-            &model,
-            &compat,
-            &HashMap::new(),
-            None,
-            &HashMap::new(),
-        );
+        let items = convert_messages(&messages, &model, &compat, None, &HashMap::new());
         println!("{}", serde_json::to_string_pretty(&items).unwrap());
         items
+    }
+
+    fn declared_tool(name: &str) -> Tool {
+        Tool {
+            name: name.into(),
+            description: format!("{name} tool"),
+            parameters: serde_json::json!({ "type": "object", "properties": {} }),
+            constrained_sampling: None,
+        }
+    }
+
+    fn system_with_tools(content: &str, tools_added: Option<Vec<Tool>>) -> Message {
+        Message::System(crate::types::SystemMessage {
+            content: crate::types::SystemContent::Text(content.into()),
+            sections: None,
+            tools_added,
+            tools_removed: None,
+            timestamp: 0,
+        })
+    }
+
+    fn messages_with_mid_conversation_tools() -> Vec<Message> {
+        vec![
+            system_with_tools("base", None),
+            user("hi"),
+            system_with_tools("", Some(vec![declared_tool("read")])),
+        ]
+    }
+
+    #[test]
+    fn mid_conversation_tools_inject_additional_tools() {
+        let mut model = make_model();
+        model.compat = Some(json!({ "supportsAdditionalTools": true }));
+        let compat = get_compat(&model);
+
+        let items = convert_messages(
+            &messages_with_mid_conversation_tools(),
+            &model,
+            &compat,
+            Some("additional-tools"),
+            &HashMap::new(),
+        );
+
+        let injected = items
+            .iter()
+            .find(|item| item["type"] == "additional_tools")
+            .expect("additional_tools 项应被注入");
+        assert_eq!(injected["role"], "developer");
+        assert_eq!(injected["tools"][0]["name"], "read");
+    }
+
+    #[test]
+    fn mid_conversation_tools_inject_tool_search_pair() {
+        let mut model = make_model();
+        model.compat = Some(json!({ "supportsToolSearch": true }));
+        let compat = get_compat(&model);
+
+        let items = convert_messages(
+            &messages_with_mid_conversation_tools(),
+            &model,
+            &compat,
+            Some("tool-search"),
+            &HashMap::new(),
+        );
+
+        let call = items
+            .iter()
+            .find(|item| item["type"] == "tool_search_call")
+            .expect("tool_search_call 应被注入");
+        let output = items
+            .iter()
+            .find(|item| item["type"] == "tool_search_output")
+            .expect("tool_search_output 应被注入");
+        assert_eq!(call["execution"], "client");
+        assert_eq!(
+            call["call_id"], output["call_id"],
+            "call 与 output 应共用 call_id"
+        );
+        assert_eq!(output["tools"][0]["name"], "read");
+    }
+
+    #[test]
+    fn leading_system_message_does_not_inject_tool_additions() {
+        let mut model = make_model();
+        model.compat = Some(json!({ "supportsAdditionalTools": true }));
+        let compat = get_compat(&model);
+
+        // 首条 system 消息的 toolsAdded 由顶层 tools 字段承载，不在消息里重复注入。
+        let messages = vec![system_with_tools("base", Some(vec![declared_tool("read")]))];
+        let items = convert_messages(
+            &messages,
+            &model,
+            &compat,
+            Some("additional-tools"),
+            &HashMap::new(),
+        );
+
+        assert!(
+            !items.iter().any(|item| item["type"] == "additional_tools"),
+            "首条 system 消息不应触发就地注入"
+        );
     }
 
     fn collect_call_ids(items: &[Value]) -> Vec<String> {
