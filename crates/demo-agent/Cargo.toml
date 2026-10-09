@@ -3,12 +3,11 @@ name = "demo-agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Command-line demo agent with per-tool approval gate"
+description = "Command-line demo agent over the pi-durable harness"
 publish = false
 
 [dependencies]
-pi-agent = { path = "../pi-agent" }
 pi-ai = { path = "../pi-ai" }
-pi-tools = { path = "../pi-tools" }
+pi-durable = { path = "../pi-durable" }
 serde_json.workspace = true
 tokio.workspace = true

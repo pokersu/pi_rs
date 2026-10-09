@@ -1,0 +1,3104 @@
+[
+	{
+		"name": "sanitize/plain",
+		"kind": "sanitize",
+		"text": "hello\nworld"
+	},
+	{
+		"name": "sanitize/tabs-and-newlines",
+		"kind": "sanitize",
+		"text": "a\tb\nc\rd"
+	},
+	{
+		"name": "sanitize/control-run",
+		"kind": "sanitize",
+		"text": "a\u0000b\u0001c\bd"
+	},
+	{
+		"name": "sanitize/keeps-0x09-0x0a",
+		"kind": "sanitize",
+		"text": "x\ty\nz"
+	},
+	{
+		"name": "sanitize/drops-0x0b-0x1f",
+		"kind": "sanitize",
+		"text": "p\u000bq\u001fr"
+	},
+	{
+		"name": "sanitize/interlinear",
+		"kind": "sanitize",
+		"text": "s￹t￻u"
+	},
+	{
+		"name": "sanitize/keeps-fffc",
+		"kind": "sanitize",
+		"text": "v￼w"
+	},
+	{
+		"name": "sanitize/multibyte",
+		"kind": "sanitize",
+		"text": "你好\n世界"
+	},
+	{
+		"name": "bound/0/head/0x0",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/0/head/0x5",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/0/head/1024x0",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/0/head/1x1",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/0/head/4x2",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/0/head/8x2",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/0/head/10x1",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/0/head/7x3",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/0/head/1024x2",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/0/head/3x10",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/0/tail/0x0",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/0/tail/0x5",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/0/tail/1024x0",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/0/tail/1x1",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/0/tail/4x2",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/0/tail/8x2",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/0/tail/10x1",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/0/tail/7x3",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/0/tail/1024x2",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/0/tail/3x10",
+		"kind": "bound",
+		"text": "",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/1/head/0x0",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/1/head/0x5",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/1/head/1024x0",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/1/head/1x1",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/1/head/4x2",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/1/head/8x2",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/1/head/10x1",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/1/head/7x3",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/1/head/1024x2",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/1/head/3x10",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/1/tail/0x0",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/1/tail/0x5",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/1/tail/1024x0",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/1/tail/1x1",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/1/tail/4x2",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/1/tail/8x2",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/1/tail/10x1",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/1/tail/7x3",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/1/tail/1024x2",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/1/tail/3x10",
+		"kind": "bound",
+		"text": "a",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/2/head/0x0",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/2/head/0x5",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/2/head/1024x0",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/2/head/1x1",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/2/head/4x2",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/2/head/8x2",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/2/head/10x1",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/2/head/7x3",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/2/head/1024x2",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/2/head/3x10",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/2/tail/0x0",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/2/tail/0x5",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/2/tail/1024x0",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/2/tail/1x1",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/2/tail/4x2",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/2/tail/8x2",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/2/tail/10x1",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/2/tail/7x3",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/2/tail/1024x2",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/2/tail/3x10",
+		"kind": "bound",
+		"text": "one\ntwo\nthree\n",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/3/head/0x0",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/3/head/0x5",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/3/head/1024x0",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/3/head/1x1",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/3/head/4x2",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/3/head/8x2",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/3/head/10x1",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/3/head/7x3",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/3/head/1024x2",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/3/head/3x10",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/3/tail/0x0",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/3/tail/0x5",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/3/tail/1024x0",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/3/tail/1x1",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/3/tail/4x2",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/3/tail/8x2",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/3/tail/10x1",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/3/tail/7x3",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/3/tail/1024x2",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/3/tail/3x10",
+		"kind": "bound",
+		"text": "one\ntwo\nthree",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/4/head/0x0",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/4/head/0x5",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/4/head/1024x0",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/4/head/1x1",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/4/head/4x2",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/4/head/8x2",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/4/head/10x1",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/4/head/7x3",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/4/head/1024x2",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/4/head/3x10",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/4/tail/0x0",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/4/tail/0x5",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/4/tail/1024x0",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/4/tail/1x1",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/4/tail/4x2",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/4/tail/8x2",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/4/tail/10x1",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/4/tail/7x3",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/4/tail/1024x2",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/4/tail/3x10",
+		"kind": "bound",
+		"text": "\n\n\n",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/5/head/0x0",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/5/head/0x5",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/5/head/1024x0",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/5/head/1x1",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/5/head/4x2",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/5/head/8x2",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/5/head/10x1",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/5/head/7x3",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/5/head/1024x2",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/5/head/3x10",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/5/tail/0x0",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/5/tail/0x5",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/5/tail/1024x0",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/5/tail/1x1",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/5/tail/4x2",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/5/tail/8x2",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/5/tail/10x1",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/5/tail/7x3",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/5/tail/1024x2",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/5/tail/3x10",
+		"kind": "bound",
+		"text": "é\néé\nééé\n",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/6/head/0x0",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/6/head/0x5",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/6/head/1024x0",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/6/head/1x1",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/6/head/4x2",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/6/head/8x2",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/6/head/10x1",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/6/head/7x3",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/6/head/1024x2",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/6/head/3x10",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/6/tail/0x0",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/6/tail/0x5",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/6/tail/1024x0",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/6/tail/1x1",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/6/tail/4x2",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/6/tail/8x2",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/6/tail/10x1",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/6/tail/7x3",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/6/tail/1024x2",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/6/tail/3x10",
+		"kind": "bound",
+		"text": "中文输出\n第二行\n第三行更长一些\n",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/7/head/0x0",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/7/head/0x5",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/7/head/1024x0",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/7/head/1x1",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/7/head/4x2",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/7/head/8x2",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/7/head/10x1",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/7/head/7x3",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/7/head/1024x2",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/7/head/3x10",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "bound/7/tail/0x0",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/7/tail/0x5",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/7/tail/1024x0",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 0,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/7/tail/1x1",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/7/tail/4x2",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/7/tail/8x2",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/7/tail/10x1",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/7/tail/7x3",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 3,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/7/tail/1024x2",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "bound/7/tail/3x10",
+		"kind": "bound",
+		"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 10,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "charEnd/ascii",
+		"kind": "characterEnd",
+		"bytes": [
+			97,
+			98,
+			99
+		],
+		"index": 2
+	},
+	{
+		"name": "charEnd/at-length",
+		"kind": "characterEnd",
+		"bytes": [
+			97,
+			98,
+			99
+		],
+		"index": 3
+	},
+	{
+		"name": "charEnd/inside-two-byte",
+		"kind": "characterEnd",
+		"bytes": [
+			195,
+			169
+		],
+		"index": 1
+	},
+	{
+		"name": "charEnd/before-two-byte",
+		"kind": "characterEnd",
+		"bytes": [
+			195,
+			169
+		],
+		"index": 0
+	},
+	{
+		"name": "charEnd/mixed",
+		"kind": "characterEnd",
+		"bytes": [
+			97,
+			195,
+			169,
+			32,
+			98
+		],
+		"index": 3
+	},
+	{
+		"name": "charEnd/empty",
+		"kind": "characterEnd",
+		"bytes": [],
+		"index": 0
+	},
+	{
+		"name": "buf/tail-lines",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 1024,
+			"maxLines": 2,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "one\n"
+			},
+			{
+				"kind": "text",
+				"text": "two\n"
+			},
+			{
+				"kind": "text",
+				"text": "three\n"
+			}
+		]
+	},
+	{
+		"name": "buf/head-lines",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "head"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "one\n"
+			},
+			{
+				"kind": "text",
+				"text": "two\n"
+			},
+			{
+				"kind": "text",
+				"text": "three\n"
+			}
+		]
+	},
+	{
+		"name": "buf/split-multibyte",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 64,
+			"maxLines": 10,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "bytes",
+				"bytes": [
+					97,
+					195,
+					169
+				]
+			}
+		]
+	},
+	{
+		"name": "buf/byte-by-byte",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 64,
+			"maxLines": 10,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "bytes",
+				"bytes": [
+					97
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					195
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					169
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					228
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					184
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					173
+				]
+			},
+			{
+				"kind": "flush"
+			}
+		]
+	},
+	{
+		"name": "buf/trailing-incomplete",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 64,
+			"maxLines": 10,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "bytes",
+				"bytes": [
+					226,
+					130
+				]
+			},
+			{
+				"kind": "flush"
+			}
+		]
+	},
+	{
+		"name": "buf/bom-leading",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 64,
+			"maxLines": 10,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "bytes",
+				"bytes": [
+					239,
+					187,
+					191,
+					111,
+					107
+				]
+			}
+		]
+	},
+	{
+		"name": "buf/bom-later-is-text",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 64,
+			"maxLines": 10,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "ok"
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					239,
+					187,
+					191
+				]
+			}
+		]
+	},
+	{
+		"name": "buf/tail-skip",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 64,
+			"maxLines": 10,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "head\n"
+			},
+			{
+				"kind": "text",
+				"text": "tail\n",
+				"skip": {
+					"bytes": 5,
+					"newlines": 1,
+					"endsWithNewline": true
+				}
+			}
+		]
+	},
+	{
+		"name": "buf/tail-skip-zero",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 64,
+			"maxLines": 10,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "keep\n"
+			},
+			{
+				"kind": "text",
+				"text": "more\n",
+				"skip": {
+					"bytes": 0,
+					"newlines": 0,
+					"endsWithNewline": false
+				}
+			}
+		]
+	},
+	{
+		"name": "buf/head-rejects-skip",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 64,
+			"maxLines": 10,
+			"retain": "head"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "tail\n",
+				"skip": {
+					"bytes": 5,
+					"newlines": 1,
+					"endsWithNewline": true
+				}
+			}
+		]
+	},
+	{
+		"name": "buf/sanitized-snapshot",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 64,
+			"maxLines": 10,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "a\u0000b\n"
+			}
+		]
+	},
+	{
+		"name": "buf/snapshots-are-repeatable",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 2,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "one\n"
+			},
+			{
+				"kind": "text",
+				"text": "two\n"
+			},
+			{
+				"kind": "text",
+				"text": "three\n"
+			},
+			{
+				"kind": "text",
+				"text": "four\n"
+			}
+		]
+	},
+	{
+		"name": "random/bound/0",
+		"kind": "bound",
+		"text": "中xxxxxxx\n\n�\ta￹\u001f￹é a\u0000b\u0000�  \u001fxxxxxxx�xxxxxxxxxxxxxx�\n �中�\u001f￹ \u0000é\n\u001fba�",
+		"limits": {
+			"maxBytes": 22,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "random/buffer/0",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 2,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "bytes",
+				"bytes": [
+					0,
+					239,
+					191,
+					189,
+					32
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					239,
+					191,
+					185,
+					31,
+					239,
+					191,
+					185,
+					195
+				]
+			}
+		]
+	},
+	{
+		"name": "random/bound/1",
+		"kind": "bound",
+		"text": "a b \t�\u0000é\u001fé�\u0000中 \t\u0000éé中éxxxxxxx￹\u001f�éb��\u001fb￹é中\u001f￹\n中bé\t\u0000\né￹é\u001fé\t\u001f\u0000\u001fb",
+		"limits": {
+			"maxBytes": 18,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "random/buffer/1",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 2,
+			"retain": "head"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "a b \t�\u0000é\u001fé�\u0000"
+			},
+			{
+				"kind": "text",
+				"text": "a b \t�\u0000é\u001fé�\u0000中 \t\u0000éé中éxxxxxxx￹\u001f�éb��\u001fb￹é中\u001f￹\n中bé\t\u0000\né￹é\u001fé\t\u001f\u0000\u001fb"
+			}
+		]
+	},
+	{
+		"name": "random/bound/2",
+		"kind": "bound",
+		"text": "�￹",
+		"limits": {
+			"maxBytes": 6,
+			"maxLines": 5,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "random/buffer/2",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 14,
+			"maxLines": 4,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "�"
+			}
+		]
+	},
+	{
+		"name": "random/bound/3",
+		"kind": "bound",
+		"text": "xxxxxxx\txxxxxxx�bab中\u001f\t中中\u001f\u001f\u0000a￹aéb \n\u0000\u001f�xxxxxxx  \u001f\t\n\n中é￹\u001f\u0000b\u0000�\nb\néb\t\u001f",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 3,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "random/buffer/3",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 9,
+			"maxLines": 3,
+			"retain": "head"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "xxxxxxx"
+			},
+			{
+				"kind": "text",
+				"text": "xxxxxx"
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					185,
+					97,
+					195,
+					169,
+					98,
+					32,
+					10,
+					0,
+					31,
+					239
+				]
+			},
+			{
+				"kind": "text",
+				"text": "xxxxxxx\txxxxx"
+			},
+			{
+				"kind": "text",
+				"text": "xxxxxxx\txxxxxxx�bab中\u001f\t中中\u001f\u001f\u0000a￹aéb \n\u0000\u001f�xxxxxxx  \u001f\t\n\n中é￹\u001f\u0000b\u0000�\nb\néb\t\u001f"
+			},
+			{
+				"kind": "flush"
+			}
+		]
+	},
+	{
+		"name": "random/bound/4",
+		"kind": "bound",
+		"text": "\nxxxxxxx中 ￹é￹ \u0000b\t\u001f\n�￹中b",
+		"limits": {
+			"maxBytes": 17,
+			"maxLines": 3,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "random/buffer/4",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 4,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "bytes",
+				"bytes": [
+					173,
+					32,
+					239,
+					191,
+					185
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					184,
+					173,
+					32,
+					239,
+					191,
+					185,
+					195,
+					169,
+					239,
+					191
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					189,
+					239,
+					191,
+					185,
+					228,
+					184,
+					173
+				]
+			},
+			{
+				"kind": "flush"
+			}
+		]
+	},
+	{
+		"name": "random/bound/5",
+		"kind": "bound",
+		"text": "中xxxxxxx\t\t￹￹�bé\u0000",
+		"limits": {
+			"maxBytes": 14,
+			"maxLines": 3,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "random/buffer/5",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 19,
+			"maxLines": 4,
+			"retain": "head"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "中xxxxxxx\t\t￹￹�bé\u0000"
+			}
+		]
+	},
+	{
+		"name": "random/bound/6",
+		"kind": "bound",
+		"text": "\u001f￹\téxxxxxxxxxxxxxxé\t\u0000éxxxxxxx\n￹xxxxxxx￹�\u0000xxxxxxx\na\n中\u001fbbxxxxxxx\n\t� \nxxxxxxx\t\u0000 éxxxxxxx￹\n\t中\nxxxxxxx中a éb\u0000￹",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "random/buffer/6",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 12,
+			"maxLines": 2,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "\u001f￹\té"
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					120,
+					120,
+					239,
+					191,
+					185,
+					10
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					169,
+					120,
+					120
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					239,
+					191,
+					185
+				]
+			},
+			{
+				"kind": "text",
+				"text": "\u001f￹\t"
+			},
+			{
+				"kind": "text",
+				"text": "\u001f￹\téxxxxxxxxxxxxxxé\t\u0000éxxxxxxx\n￹xxxxxxx￹�\u0000xxxxxxx\na\n中\u001fbbxxxxxxx\n\t� \nxxxxxxx\t\u0000 éxxxxxxx￹\n\t中\nxxxxxxx中a éb\u0000￹"
+			},
+			{
+				"kind": "flush"
+			}
+		]
+	},
+	{
+		"name": "random/bound/7",
+		"kind": "bound",
+		"text": "xxxxxxxb中�\u001f\u001fbbé中 \u001f\ta中�￹中\n\u0000\u0000\u001f\u001f\u0000xxxxxxx中 b",
+		"limits": {
+			"maxBytes": 23,
+			"maxLines": 5,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "random/buffer/7",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 1,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "bytes",
+				"bytes": [
+					185,
+					228
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					173,
+					32
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					120,
+					228,
+					184,
+					173,
+					32,
+					98
+				]
+			},
+			{
+				"kind": "flush"
+			}
+		]
+	},
+	{
+		"name": "random/bound/8",
+		"kind": "bound",
+		"text": "￹xxxxxxx\t\t中\u0000�\u001fxxxxxxx\téaa\u001f��a中 \t�\u001f\t\t�￹￹\u001f\u001f\u0000中 \u001f",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "random/buffer/8",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 17,
+			"maxLines": 4,
+			"retain": "head"
+		},
+		"chunks": [
+			{
+				"kind": "bytes",
+				"bytes": [
+					9,
+					239,
+					191,
+					189,
+					239,
+					191,
+					185,
+					239,
+					191,
+					185
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					31
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					31,
+					9,
+					9,
+					239
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					9,
+					195,
+					169,
+					97,
+					97,
+					31
+				]
+			}
+		]
+	},
+	{
+		"name": "random/bound/9",
+		"kind": "bound",
+		"text": "�é b�\u001f￹ �￹ xxxxxxx中é￹ �￹é\n\tbxxxxxxx\u0000xxxxxxxa\u001f\tbb� ￹é\u001f中\u0000\u0000a\n�aé￹ xxxxxxx 中é\u001f\t",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "random/buffer/9",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 7,
+			"maxLines": 1,
+			"retain": "head"
+		},
+		"chunks": [
+			{
+				"kind": "bytes",
+				"bytes": [
+					120
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					120
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					191,
+					185,
+					32,
+					239,
+					191,
+					189,
+					239,
+					191
+				]
+			},
+			{
+				"kind": "text",
+				"text": "�é "
+			},
+			{
+				"kind": "text",
+				"text": "�é b"
+			}
+		]
+	},
+	{
+		"name": "random/bound/10",
+		"kind": "bound",
+		"text": " a \u0000\u001f\n\t \u001f\nbaaxxxxxxxé\tb\t\nb\t中\t中\u001f中\txxxxxxx中éaxxxxxxx中\u0000\n\n",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 3,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "random/buffer/10",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 2,
+			"retain": "head"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": " a \u0000\u001f\n\t \u001f\nbaax"
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					228
+				]
+			},
+			{
+				"kind": "text",
+				"text": " a \u0000\u001f\n\t \u001f\nbaaxxxxxx"
+			},
+			{
+				"kind": "text",
+				"text": " a \u0000\u001f\n\t \u001f\nbaaxxx"
+			},
+			{
+				"kind": "text",
+				"text": " a \u0000\u001f\n\t \u001f\nbaaxxxxxxxé\tb\t\nb\t中\t中\u001f中\txxxxxxx中éaxxxxxxx中\u0000\n\n"
+			}
+		]
+	},
+	{
+		"name": "random/bound/11",
+		"kind": "bound",
+		"text": "éb￹",
+		"limits": {
+			"maxBytes": 19,
+			"maxLines": 3,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "random/buffer/11",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 1,
+			"maxLines": 4,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "éb￹"
+			},
+			{
+				"kind": "text",
+				"text": "éb￹"
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					169
+				]
+			},
+			{
+				"kind": "flush"
+			}
+		]
+	},
+	{
+		"name": "random/bound/12",
+		"kind": "bound",
+		"text": "\u0000�xxxxxxx\u001f￹\u001f\u001f\u0000\u001f�\t 中éé��\u0000b\t￹a\u0000",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "random/buffer/12",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 9,
+			"maxLines": 1,
+			"retain": "head"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "\u0000�xxxxxx"
+			}
+		]
+	},
+	{
+		"name": "random/bound/13",
+		"kind": "bound",
+		"text": "xxxxxxx\u001fxxxxxxx \n￹\u0000b\u0000\t\nb\nbbxxxxxxxb\u001f\u0000a\n ￹\taé�b",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 3,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "random/buffer/13",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 17,
+			"maxLines": 2,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "xxxxxxx\u001fxxxxxxx \n￹\u0000"
+			},
+			{
+				"kind": "text",
+				"text": "xx"
+			},
+			{
+				"kind": "text",
+				"text": "xxxx"
+			},
+			{
+				"kind": "text",
+				"text": "xxxx"
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					120,
+					120,
+					120
+				]
+			},
+			{
+				"kind": "flush"
+			}
+		]
+	},
+	{
+		"name": "random/bound/14",
+		"kind": "bound",
+		"text": "xxxxxxx\t�\n\u0000 a￹a�b�é\u0000b中b�é \u001f�b\u0000\na中\u0000",
+		"limits": {
+			"maxBytes": 6,
+			"maxLines": 5,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "random/buffer/14",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "head"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "xxxxxxx"
+			},
+			{
+				"kind": "text",
+				"text": "xxxxxxx\t�\n\u0000"
+			},
+			{
+				"kind": "text",
+				"text": "xxxxxxx\t�\n\u0000 a￹a�b�é\u0000b中b�é \u001f�b\u0000\na中\u0000"
+			},
+			{
+				"kind": "flush"
+			}
+		]
+	},
+	{
+		"name": "random/bound/15",
+		"kind": "bound",
+		"text": "ééab�  \u001f\n￹￹中aé\u001f\n xxxxxxx� ��中\n\u0000xxxxxxx\txxxxxxx \t\n\u0000\t\n中é￹b�bba中￹\n\u001f b\u0000�中",
+		"limits": {
+			"maxBytes": 11,
+			"maxLines": 1,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "random/buffer/15",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 4,
+			"retain": "head"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "ééab�  "
+			},
+			{
+				"kind": "text",
+				"text": "ééab�  \u001f\n￹￹中aé\u001f\n xxxxxxx� ��中\n\u0000xxxxxxx\txxxxxxx \t\n\u0000\t\n中é￹b�bba中￹\n\u001f b\u0000�中"
+			},
+			{
+				"kind": "flush"
+			}
+		]
+	},
+	{
+		"name": "random/bound/16",
+		"kind": "bound",
+		"text": " \tbxxxxxxxaxxxxxxxxxxxxxxbbéaé\txxxxxxx\u0000\u0000\n\u0000\u0000 b\u0000xxxxxxxxxxxxxxéa\t\nxxxxxxx￹\n\u001fb aé�\t�\n\n",
+		"limits": {
+			"maxBytes": 0,
+			"maxLines": 5,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "random/buffer/16",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 6,
+			"maxLines": 3,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": " \tbx"
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					120,
+					120,
+					120,
+					0,
+					0,
+					10,
+					0,
+					0,
+					32
+				]
+			},
+			{
+				"kind": "text",
+				"text": " \tbxxx"
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					120,
+					120,
+					120,
+					120,
+					120
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					97,
+					9,
+					10,
+					120,
+					120,
+					120,
+					120,
+					120,
+					120,
+					120
+				]
+			}
+		]
+	},
+	{
+		"name": "random/bound/17",
+		"kind": "bound",
+		"text": "\t\t\n�béxxxxxxx 中中�bxxxxxxx\nb",
+		"limits": {
+			"maxBytes": 8,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "random/buffer/17",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 16,
+			"maxLines": 2,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "\t\t\n"
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					173,
+					239,
+					191,
+					189,
+					98
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					120,
+					120,
+					32,
+					228,
+					184,
+					173,
+					228,
+					184,
+					173,
+					239
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					120,
+					120,
+					120,
+					120,
+					120,
+					10,
+					98
+				]
+			},
+			{
+				"kind": "flush"
+			}
+		]
+	},
+	{
+		"name": "random/bound/18",
+		"kind": "bound",
+		"text": "\u0000\u0000\u0000\u001f\n\u0000\u001f ",
+		"limits": {
+			"maxBytes": 18,
+			"maxLines": 3,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "random/buffer/18",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 13,
+			"maxLines": 1,
+			"retain": "head"
+		},
+		"chunks": [
+			{
+				"kind": "bytes",
+				"bytes": [
+					0,
+					31,
+					10,
+					0,
+					31,
+					32
+				]
+			},
+			{
+				"kind": "flush"
+			}
+		]
+	},
+	{
+		"name": "random/bound/19",
+		"kind": "bound",
+		"text": "é",
+		"limits": {
+			"maxBytes": 18,
+			"maxLines": 5,
+			"retain": "head"
+		}
+	},
+	{
+		"name": "random/buffer/19",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 17,
+			"maxLines": 2,
+			"retain": "head"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "é"
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					195,
+					169
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					169
+				]
+			},
+			{
+				"kind": "text",
+				"text": "é"
+			}
+		]
+	},
+	{
+		"name": "random/bound/20",
+		"kind": "bound",
+		"text": "éé中\t \t\né \t\txxxxxxx\n\n�\nxxxxxxx中b\nxxxxxxx\t中xxxxxxx￹ bxxxxxxx\n",
+		"limits": {
+			"maxBytes": 3,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "random/buffer/20",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 19,
+			"maxLines": 4,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "bytes",
+				"bytes": [
+					184,
+					173,
+					9,
+					32,
+					9,
+					10,
+					195,
+					169,
+					32
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					184,
+					173,
+					98,
+					10,
+					120,
+					120,
+					120,
+					120,
+					120,
+					120
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					195,
+					169,
+					32,
+					9
+				]
+			},
+			{
+				"kind": "text",
+				"text": "éé中\t \t\né \t\txxxxxxx\n\n�\nxxxxxxx中b\nxxxxxxx\t中xxxxxxx￹ bxxxxxxx\n"
+			}
+		]
+	},
+	{
+		"name": "random/bound/21",
+		"kind": "bound",
+		"text": "axxxxxxxxxxxxxx\n\u001f\t 中\u001f\n\u001f\u0000中\t��xxxxxxxa\t中xxxxxxx\né \u001f中中 中xxxxxxx bé\u0000中xxxxxxxaéxxxxxxxé\n\tb�xxxxxxxb\u001f  ",
+		"limits": {
+			"maxBytes": 21,
+			"maxLines": 1,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "random/buffer/21",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 4,
+			"maxLines": 2,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "axxxxxxxxxxxx"
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					120,
+					120,
+					120,
+					120,
+					120,
+					120,
+					120,
+					10,
+					195
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					228,
+					184,
+					173,
+					31,
+					10
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					120,
+					120,
+					120,
+					120,
+					195,
+					169,
+					10,
+					9,
+					98
+				]
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					120,
+					120,
+					120
+				]
+			}
+		]
+	},
+	{
+		"name": "random/bound/22",
+		"kind": "bound",
+		"text": "\t\u0000\u0000xxxxxxx",
+		"limits": {
+			"maxBytes": 10,
+			"maxLines": 2,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "random/buffer/22",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 6,
+			"maxLines": 4,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "\t\u0000\u0000x"
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					120
+				]
+			},
+			{
+				"kind": "text",
+				"text": "\t\u0000\u0000xxxxxxx"
+			}
+		]
+	},
+	{
+		"name": "random/bound/23",
+		"kind": "bound",
+		"text": "b\n\n中�\n\n \n\tb中é\né� bé￹é\t�\n\né￹xxxxxxxb�中éa  aaa中�  éaxxxxxxx�éxxxxxxxa\ta�é",
+		"limits": {
+			"maxBytes": 14,
+			"maxLines": 5,
+			"retain": "tail"
+		}
+	},
+	{
+		"name": "random/buffer/23",
+		"kind": "buffer",
+		"limits": {
+			"maxBytes": 19,
+			"maxLines": 1,
+			"retain": "tail"
+		},
+		"chunks": [
+			{
+				"kind": "text",
+				"text": "b"
+			},
+			{
+				"kind": "bytes",
+				"bytes": [
+					228,
+					184,
+					173
+				]
+			},
+			{
+				"kind": "text",
+				"text": "b\n\n中�\n\n"
+			},
+			{
+				"kind": "text",
+				"text": "b\n\n中�\n\n \n\tb中é\né� b"
+			},
+			{
+				"kind": "text",
+				"text": "b\n\n中�\n\n \n\tb中é\né"
+			},
+			{
+				"kind": "flush"
+			}
+		]
+	}
+]

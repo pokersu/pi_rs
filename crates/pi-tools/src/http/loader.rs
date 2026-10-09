@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use pi_agent::AgentTool;
+use pi_agent_core::AgentTool;
 
 use crate::http::config::HttpToolConfig;
 use crate::http::executor::config_to_tool;

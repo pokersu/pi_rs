@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pi_agent::{AgentTool, AgentToolResult};
+use pi_agent_core::{AgentTool, AgentToolResult};
 use pi_ai::{TextContent, TextKind, TextOrImageContent};
 
 /// 构造 `now` 工具：返回当前 UTC Unix 时间戳（秒）。

@@ -59,6 +59,7 @@ pub fn create_error_message(
         raw_stop_reason: None,
         end_turn: None,
         timestamp: now_ms(),
+        duration_ms: None,
     }
 }
 

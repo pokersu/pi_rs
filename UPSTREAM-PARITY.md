@@ -1,6 +1,6 @@
 # pi_rs ↔ upstream 方法级对比报告
 
-> 基线：`upstream/` 检出于 `v0.99.2`（HEAD `005af57d8`）
+> 基线：`upstream/` 检出于 `v1.1.0`（HEAD `abe508e1b`）
 
 > 方法：提取 TS 顶层导出（class/function/const/interface/type/enum）与 class 方法，
 > 按 camelCase→snake_case 在 Rust 侧同名查找。`local` 命中视为 OK；
@@ -12,33 +12,29 @@
 
 上游包 → Rust crate 映射（用于确认范围）：
 
-- `packages/agent` → `crates/pi-agent`（**完整复刻目标**）
+- `packages/agent` → `crates/pi-agent-core`（**完整复刻目标**）
 - `packages/ai` → `crates/pi-ai`（**声明子集**，范围见 `crates/pi-ai/AGENT.md`）
 - `packages/telemetry` → `crates/pi-telemetry`
-- 未复刻：`chord`、`client`、`codemode`、`coding-agent`、`durable`、`evals`、
-  `mcp`、`protocol`、`server`、`session-backends`、`tui`（以及 agent 包内的 `pico3`、`polymarket`）
+- `packages/durable` → `crates/pi-durable`（**完整复刻目标**）
+- `packages/chord` → `crates/pi-durable/src/chord`（**子集**，范围见 `scan.py` 的 `CHORD_SCOPE`）
+- 未复刻：`client`、`codemode`、`coding-agent`、`env`、`evals`、
+  `mcp`、`protocol`、`server`、`tui`（产品层）
 
 扫描统计：
 
-- **agent** → `crates/pi-agent/src`：配对 83 · 缺文件 9 · 范围外 0 · 缺符号 139 · 移位 41 · 私有函数差异 56
-- **ai** → `crates/pi-ai/src`：配对 40 · 缺文件 0 · 范围外 151 · 缺符号 107 · 移位 5 · 私有函数差异 68
+- **agent** → `crates/pi-agent-core/src`：配对 6 · 缺文件 0 · 范围外 0 · 缺符号 7 · 移位 2 · 私有函数差异 3
+- **ai** → `crates/pi-ai/src`：配对 40 · 缺文件 0 · 范围外 155 · 缺符号 102 · 移位 5 · 私有函数差异 69
 - **telemetry** → `crates/pi-telemetry/src`：配对 6 · 缺文件 0 · 范围外 0 · 缺符号 12 · 移位 0 · 私有函数差异 3
+- **durable** → `crates/pi-durable/src`：配对 58 · 缺文件 9 · 范围外 0 · 缺符号 59 · 移位 34 · 私有函数差异 32
+- **chord** → `crates/pi-durable/src/chord`：配对 4 · 缺文件 5 · 范围外 20 · 缺符号 15 · 移位 1 · 私有函数差异 11
 
-## packages/agent → `crates/pi-agent/src`
+## packages/agent → `crates/pi-agent-core/src`
 
-统计：配对 83 文件 · 文件缺失 9 · 范围外 0 · 符号缺失 139 · 符号移位 41 · 私有函数差异 56
+统计：配对 6 文件 · 文件缺失 0 · 范围外 0 · 符号缺失 7 · 符号移位 2 · 私有函数差异 3
 
 ### 1) 文件级缺失（范围内，Rust 侧无对应文件）
 
-- `harness/session/testing/gating-storage.ts`
-- `harness/session/testing/instrumented-storage.ts`
-- `harness/session/testing/storage-decorator.ts`
-- `harness/session/testing/benchmark/datasets.ts`
-- `harness/session/testing/benchmark/session-repo.ts`
-- `harness/session/testing/benchmark/storage.ts`
-- `harness/session/testing/conformance/session-repo.ts`
-- `harness/session/testing/conformance/storage.ts`
-- `harness/session/jsonl/legacy-v3.ts`
+（无）
 
 ### 2) 符号级缺失（TS 有，Rust 整 crate 未见同名）
 
@@ -46,230 +42,16 @@
 **`agent.ts`** → `agent.rs`
 
 - MISSING `AgentInitialState` (type) → 期望 `agent_initial_state`  ← 候选: `state`
-- MISSING `continue` (method) → 期望 `continue`  ← 候选: `continue_turn`, `continue_operation`, `agent_loop_continue`, `run_agent_loop_continue`
-- MISSING `followUpMode` (method) → 期望 `follow_up_mode`  ← 候选: `get_follow_up_mode`, `set_follow_up_mode`, `follow_up`
-- MISSING `normalizePromptInput` (method) → 期望 `normalize_prompt_input`  ← 候选: `prompt`
-- MISSING `steeringMode` (method) → 期望 `steering_mode`  ← 候选: `get_steering_mode`, `set_steering_mode`, `steer`
-- <sub>移位 1 项：`prompt`</sub>
+- MISSING `continue` (method) → 期望 `continue`  ← 候选: `continue_turn`, `agent_loop_continue`, `run_agent_loop_continue`
+- MISSING `normalizePromptInput` (method) → 期望 `normalize_prompt_input`
+- MISSING `prompt` (method) → 期望 `prompt`  ← 候选: `prompt_text`, `prompt_messages`, `run_prompt_messages`, `prompt_text_with_images`
 
 **`types.ts`** → `types.rs`
 
 - MISSING `CustomAgentMessages` (type) → 期望 `custom_agent_messages`
-- MISSING `FinishTurn` (type) → 期望 `finish_turn`  ← 候选: `finish`
+- MISSING `FinishTurn` (type) → 期望 `finish_turn`
 - MISSING `PrepareRequest` (type) → 期望 `prepare_request`
 - <sub>移位 1 项：`AgentToolCallOutcome`</sub>
-
-**`harness/agent-harness.ts`** → `harness/agent-harness.rs`
-
-- MISSING `AbortRequestResult` (type) → 期望 `abort_request_result`  ← 候选: `abort`
-- MISSING `AcquireLaneOptions` (type) → 期望 `acquire_lane_options`
-- MISSING `AgentHarness` (type) → 期望 `agent_harness`  ← 候选: `create_agent_harness`
-- MISSING `AgentHarnessConstructor` (type) → 期望 `agent_harness_constructor`
-- MISSING `AgentHarnessOptions` (type) → 期望 `agent_harness_options`
-- MISSING `ConfigEventPayload` (type) → 期望 `config_event_payload`
-- MISSING `EventListener` (type) → 期望 `event_listener`
-- MISSING `Events` (type) → 期望 `events`  ← 候选: `process_events`, `committed_entry_events`, `entry_lifecycle_events`, `boundary_placement_events`
-- MISSING `GlobalConfigEventPayload` (type) → 期望 `global_config_event_payload`
-- MISSING `HandlerErrorPayload` (type) → 期望 `handler_error_payload`
-- MISSING `HarnessEventPayload` (type) → 期望 `harness_event_payload`
-- MISSING `HarnessEventType` (type) → 期望 `harness_event_type`  ← 候选: `event_type`
-- MISSING `HookHandler` (type) → 期望 `hook_handler`
-- MISSING `HookInvocation` (type) → 期望 `hook_invocation`
-- MISSING `HookMap` (type) → 期望 `hook_map`
-- MISSING `LaneConfigEventPayload` (type) → 期望 `lane_config_event_payload`  ← 候选: `lane_config`
-- MISSING `LaneEventPayload` (type) → 期望 `lane_event_payload`
-- MISSING `LaneExecutionInfo` (type) → 期望 `lane_execution_info`
-- MISSING `LaneTranscriptSnapshot` (type) → 期望 `lane_transcript_snapshot`  ← 候选: `snapshot`
-- MISSING `LaneWatchEvent` (type) → 期望 `lane_watch_event`  ← 候选: `watch`
-- MISSING `OperationAdmissionError` (type) → 期望 `operation_admission_error`  ← 候选: `on_error`
-- MISSING `OperationAdmissionResult` (type) → 期望 `operation_admission_result`
-- MISSING `SpecialEventPayload` (type) → 期望 `special_event_payload`
-- <sub>移位 7 项：`HarnessEvent`, `HookName`, `Hooks`, `LaneQueuedItem`, `LaneSnapshot`, `LaneSnapshotTool`, `SessionSnapshot`</sub>
-
-**`harness/events.ts`** → `harness/events.rs`
-
-- MISSING `enqueueBarrier` (method) → 期望 `enqueue_barrier`  ← 候选: `enqueue`
-- MISSING `setUnsubscribe` (method) → 期望 `set_unsubscribe`  ← 候选: `unsubscribe`, `subscribe`
-- MISSING `watchFromSnapshot` (method) → 期望 `watch_from_snapshot`  ← 候选: `snapshot`, `watch`
-
-**`harness/hooks.ts`** → `harness/hooks.rs`
-
-- MISSING `invokeToolRegistration` (method) → 期望 `invoke_tool_registration`
-
-**`harness/result.ts`** → `harness/result.rs`
-
-- MISSING `Closed` (class) → 期望 `closed`  ← 候选: `close`, `invoke_all_fail_closed`
-- MISSING `HarnessClosed` (class) → 期望 `harness_closed`  ← 候选: `close`
-- MISSING `HarnessFault` (class) → 期望 `harness_fault`  ← 候选: `fault`
-- MISSING `InvalidLane` (class) → 期望 `invalid_lane`
-- MISSING `InvalidMessage` (class) → 期望 `invalid_message`
-- MISSING `InvalidNavigation` (class) → 期望 `invalid_navigation`
-- MISSING `LaneBusy` (class) → 期望 `lane_busy`
-- MISSING `NoActiveOperation` (class) → 期望 `no_active_operation`
-- MISSING `NoActiveRun` (class) → 期望 `no_active_run`
-- MISSING `NothingToCompact` (class) → 期望 `nothing_to_compact`  ← 候选: `compact`
-- MISSING `NothingToResume` (class) → 期望 `nothing_to_resume`  ← 候选: `resume`
-- MISSING `OperationMismatch` (class) → 期望 `operation_mismatch`  ← 候选: `mismatch`
-- MISSING `Result` (type) → 期望 `result`  ← 候选: `get_result`, `_result_shape`, `result_entry_id`, `drive_run_result`
-- MISSING `TaggedErrorFactory` (type) → 期望 `tagged_error_factory`
-- MISSING `TaggedErrorValue` (type) → 期望 `tagged_error_value`  ← 候选: `value`
-- MISSING `UnknownSkill` (class) → 期望 `unknown_skill`  ← 候选: `skill`
-- MISSING `UnknownTarget` (class) → 期望 `unknown_target`
-- MISSING `UnknownTemplate` (class) → 期望 `unknown_template`
-- MISSING `is` (method) → 期望 `is`
-
-**`harness/telemetry.ts`** → `harness/telemetry.rs`
-
-- MISSING `AiSpan` (type) → 期望 `ai_span`  ← 候选: `start_ai_span`
-- MISSING `AiSpanAttributes` (type) → 期望 `ai_span_attributes`
-- MISSING `AiSpanEndAttributes` (type) → 期望 `ai_span_end_attributes`
-- MISSING `AiSpanEventAttributes` (type) → 期望 `ai_span_event_attributes`
-- MISSING `AiSpanEventName` (type) → 期望 `ai_span_event_name`
-- MISSING `AiSpanName` (type) → 期望 `ai_span_name`
-- MISSING `AiSpanStartAttributes` (type) → 期望 `ai_span_start_attributes`  ← 候选: `start`
-- MISSING `AiTelemetrySpan` (type) → 期望 `ai_telemetry_span`
-- MISSING `HarnessSpan` (type) → 期望 `harness_span`  ← 候选: `start_harness_span`
-- MISSING `HarnessSpanAttributes` (type) → 期望 `harness_span_attributes`
-- MISSING `HarnessSpanEndAttributes` (type) → 期望 `harness_span_end_attributes`
-- MISSING `HarnessSpanEventAttributes` (type) → 期望 `harness_span_event_attributes`
-- MISSING `HarnessSpanEventName` (type) → 期望 `harness_span_event_name`
-- MISSING `HarnessSpanName` (type) → 期望 `harness_span_name`
-- MISSING `HarnessSpanStartAttributes` (type) → 期望 `harness_span_start_attributes`  ← 候选: `start`
-- MISSING `HarnessTelemetrySpan` (type) → 期望 `harness_telemetry_span`
-
-**`harness/types.ts`** → `harness/types.rs`
-
-- MISSING `AgentHarnessResources` (type) → 期望 `agent_harness_resources`
-- MISSING `AgentHarnessToolContextSource` (type) → 期望 `agent_harness_tool_context_source`
-- MISSING `Result` (type) → 期望 `result`  ← 候选: `get_result`, `_result_shape`, `result_entry_id`, `drive_run_result`
-- MISSING `err` (fn) → 期望 `err`
-- MISSING `ok` (fn) → 期望 `ok`
-- MISSING `toError` (fn) → 期望 `to_error`
-- <sub>移位 2 项：`getOrThrow`, `getOrUndefined`</sub>
-
-**`harness/tools/bash.ts`** → `harness/tools/bash.rs`
-
-- MISSING `BashToolDetails` (type) → 期望 `bash_tool_details`
-- MISSING `BashToolInput` (type) → 期望 `bash_tool_input`
-
-**`harness/tools/edit.ts`** → `harness/tools/edit.rs`
-
-- MISSING `EditToolDetails` (type) → 期望 `edit_tool_details`
-- MISSING `EditToolInput` (type) → 期望 `edit_tool_input`
-
-**`harness/tools/read.ts`** → `harness/tools/read.rs`
-
-- MISSING `ReadToolDetails` (type) → 期望 `read_tool_details`
-- MISSING `ReadToolInput` (type) → 期望 `read_tool_input`
-
-**`harness/tools/write.ts`** → `harness/tools/write.rs`
-
-- MISSING `WriteToolInput` (type) → 期望 `write_tool_input`  ← 候选: `write`
-
-**`harness/runtime/harness.ts`** → `harness/runtime/harness.rs`
-
-- MISSING `getConfig` (method) → 期望 `get_config`
-- MISSING `setConfig` (method) → 期望 `set_config`  ← 候选: `set_configuration_identity`
-
-**`harness/runtime/lane.ts`** → `harness/runtime/lane.rs`
-
-- MISSING `captureLaneSnapshot` (method) → 期望 `capture_lane_snapshot`  ← 候选: `capture_lane_snapshot_inner`, `snapshot`
-- MISSING `requestOperationAbort` (method) → 期望 `request_operation_abort`  ← 候选: `abort`
-- MISSING `setConfiguration` (method) → 期望 `set_configuration`  ← 候选: `set_configuration_identity`
-- <sub>移位 1 项：`Lane`</sub>
-
-**`harness/runtime/restore.ts`** → `harness/runtime/restore.rs`
-
-- MISSING `restoreSession` (fn) → 期望 `restore_session`  ← 候选: `restore_session_arc`, `session`
-
-**`harness/compaction/compaction.ts`** → `harness/compaction/compaction.rs`
-
-- MISSING `SummaryGenerationOptions` (type) → 期望 `summary_generation_options`
-
-**`harness/utils/adaptive-publisher.ts`** → `harness/utils/adaptive-publisher.rs`
-
-- MISSING `AdaptivePublisherOptions` (type) → 期望 `adaptive_publisher_options`  ← 候选: `publish`
-
-**`harness/utils/shell-output.ts`** → `harness/utils/shell-output.rs`
-
-- MISSING `ShellCaptureOptions` (type) → 期望 `shell_capture_options`
-
-**`harness/utils/truncate.ts`** → `harness/utils/truncate.rs`
-
-- MISSING `utf8ByteLength` (fn) → 期望 `utf8_byte_length`
-
-**`harness/session/commit.ts`** → `harness/session/commit.rs`
-
-- MISSING `CommittedEntryWrite` (type) → 期望 `committed_entry_write`  ← 候选: `commit`, `write`
-- MISSING `CommittedListAppendWrite` (type) → 期望 `committed_list_append_write`  ← 候选: `append`, `commit`, `write`
-- MISSING `CommittedListDeleteWrite` (type) → 期望 `committed_list_delete_write`  ← 候选: `commit`, `delete`, `write`
-- MISSING `CommittedUsageWrite` (type) → 期望 `committed_usage_write`  ← 候选: `commit`, `write`
-- MISSING `CommittedValueDeleteWrite` (type) → 期望 `committed_value_delete_write`  ← 候选: `commit`, `delete`, `value`, `write`
-- MISSING `CommittedValueSetWrite` (type) → 期望 `committed_value_set_write`  ← 候选: `commit`, `value`, `write`
-
-**`harness/session/context.ts`** → `harness/session/context.rs`
-
-- MISSING `SessionContextBuildOptions` (type) → 期望 `session_context_build_options`  ← 候选: `session`
-
-**`harness/session/memory.ts`** → `harness/session/memory.rs`
-
-- MISSING `MemorySessionRepoOptions` (type) → 期望 `memory_session_repo_options`  ← 候选: `session`
-- MISSING `MemoryStorageOptions` (type) → 期望 `memory_storage_options`  ← 候选: `storage`
-- MISSING `openRecord` (method) → 期望 `open_record`
-- MISSING `reserveId` (method) → 期望 `reserve_id`
-- MISSING `wrapBranch` (method) → 期望 `wrap_branch`  ← 候选: `branch`
-- <sub>移位 16 项：`admit`, `appendList`, `beginMutation`, `branch`, `createBranch`, `deleteList`, `deleteValue`, `findEntries`, `findEntry`, `getEntry`, `getLabel`, `getName`, `mutate`, `setLabel`, `setName`, `setValue`</sub>
-
-**`harness/session/session.ts`** → `harness/session/session.rs`
-
-- MISSING `SessionBranchExistsError` (class) → 期望 `session_branch_exists_error`  ← 候选: `session`, `branch`, `exists`
-- MISSING `SessionInvalidBranchError` (class) → 期望 `session_invalid_branch_error`  ← 候选: `session`, `branch`
-- MISSING `SessionPendingAssistantMessageError` (class) → 期望 `session_pending_assistant_message_error`  ← 候选: `session`
-- MISSING `SessionUnknownTargetError` (class) → 期望 `session_unknown_target_error`  ← 候选: `session`
-- MISSING `StorageBackedSessionOptions` (type) → 期望 `storage_backed_session_options`  ← 候选: `session`, `storage`
-- <sub>移位 2 项：`mutate`, `settle`</sub>
-
-**`harness/session/types.ts`** → `harness/session/types.rs`
-
-- MISSING `AssistantEffectPendingOperation` (type) → 期望 `assistant_effect_pending_operation`
-- MISSING `AssistantReadyOperation` (type) → 期望 `assistant_ready_operation`
-- MISSING `AssistantRetryWaitOperation` (type) → 期望 `assistant_retry_wait_operation`
-- MISSING `CheckpointOperation` (type) → 期望 `checkpoint_operation`
-- MISSING `DeferredEffectPendingOperation` (type) → 期望 `deferred_effect_pending_operation`
-- MISSING `DeferredSuspendedOperation` (type) → 期望 `deferred_suspended_operation`
-- MISSING `NavigationReadyToCommitOperation` (type) → 期望 `navigation_ready_to_commit_operation`  ← 候选: `commit`
-- MISSING `OperationAt` (type) → 期望 `operation_at`
-- MISSING `SessionMutator` (type) → 期望 `session_mutator`  ← 候选: `session`
-- MISSING `StartingOperation` (type) → 期望 `starting_operation`  ← 候选: `start`
-- MISSING `SummaryDecidingOperation` (type) → 期望 `summary_deciding_operation`
-- MISSING `SummaryEffectPendingOperation` (type) → 期望 `summary_effect_pending_operation`
-- MISSING `SummaryGenerationEffectPending` (type) → 期望 `summary_generation_effect_pending`
-- MISSING `SummaryGenerationReady` (type) → 期望 `summary_generation_ready`
-- MISSING `SummaryGenerationRetryWait` (type) → 期望 `summary_generation_retry_wait`
-- MISSING `SummaryReadyOperation` (type) → 期望 `summary_ready_operation`
-- MISSING `SummaryRetryWaitOperation` (type) → 期望 `summary_retry_wait_operation`
-- MISSING `ToolsOperation` (type) → 期望 `tools_operation`
-- MISSING `operationScopeOf` (fn) → 期望 `operation_scope_of`  ← 候选: `scope`
-
-**`harness/session/testing/types.ts`** → `harness/session/testing/types.rs`
-
-- MISSING `ConformanceCase` (type) → 期望 `conformance_case`
-- MISSING `StorageFixture` (type) → 期望 `storage_fixture`  ← 候选: `storage`
-
-**`harness/session/jsonl/storage.ts`** → `harness/session/jsonl/storage.rs`
-
-- MISSING `applyCommit` (method) → 期望 `apply_commit`  ← 候选: `commit`
-- MISSING `isLegacyV3` (method) → 期望 `is_legacy_v3`  ← 候选: `is_legacy_v3_session_header`
-- MISSING `openLegacyV3` (method) → 期望 `open_legacy_v3`
-- MISSING `openV4` (method) → 期望 `open_v4`
-- MISSING `replayCommitted` (method) → 期望 `replay_committed`  ← 候选: `commit`
-- MISSING `upgradeLegacyV3ToV4` (method) → 期望 `upgrade_legacy_v3_to_v4`
-- MISSING `withImportedUsage` (method) → 期望 `with_imported_usage`
-
-**`harness/session/jsonl/types.ts`** → `harness/session/jsonl/types.rs`
-
-- MISSING `JsonlSessionRepoOptions` (type) → 期望 `jsonl_session_repo_options`  ← 候选: `session`
-- <sub>移位 1 项：`JsonlStorageOptions`</sub>
 
 ### 3) 私有顶层函数差异（TS 非导出实现函数，Rust 未见同名）
 
@@ -281,135 +63,25 @@
 
 **`agent-loop.ts`** → `agent-loop.rs`
 
-- PRIVATE `emitToolExecutionUpdate`  ← 候选: `update`
+- PRIVATE `emitToolExecutionUpdate`
 
 **`agent.ts`** → `agent.rs`
 
-- PRIVATE `createMutableAgentState`  ← 候选: `create`, `state`
+- PRIVATE `createMutableAgentState`  ← 候选: `state`
 
 **`proxy.ts`** → `proxy.rs`
 
 - PRIVATE `buildProxyRequestOptions`  ← 候选: `proxy_request`
 
-**`harness/prompt-templates.ts`** → `harness/prompt-templates.rs`
-
-- PRIVATE `loadTemplateFromFile`
-- PRIVATE `loadTemplatesFromDir`
-- PRIVATE `resolveKind`
-
-**`harness/skills.ts`** → `harness/skills.rs`
-
-- PRIVATE `addIgnoreRules`
-- PRIVATE `loadSkillsFromDirInternal`  ← 候选: `load_skills_from_dir`, `load_skills`, `skill`
-- PRIVATE `prefixIgnorePattern`
-- PRIVATE `resolveKind`
-
-**`harness/tools/bash.ts`** → `harness/tools/bash.rs`
-
-- PRIVATE `validateTimeout`
-
-**`harness/tools/edit-diff.ts`** → `harness/tools/edit-diff.rs`
-
-- PRIVATE `getDuplicateError`
-- PRIVATE `getEmptyOldTextError`
-- PRIVATE `getNoChangeError`
-- PRIVATE `getNotFoundError`
-
-**`harness/tools/edit.ts`** → `harness/tools/edit.rs`
-
-- PRIVATE `editAccessError`
-
-**`harness/tools/file-mutation-queue.ts`** → `harness/tools/file-mutation-queue.rs`
-
-- PRIVATE `getMutationQueueKey`
-- PRIVATE `getState`  ← 候选: `state`
-
-**`harness/runtime/lane.ts`** → `harness/runtime/lane.rs`
-
-- PRIVATE `inboxItems`
-- PRIVATE `isPromiseLike`
-- PRIVATE `withoutInboxItems`
-
-**`harness/runtime/restore.ts`** → `harness/runtime/restore.rs`
-
-- PRIVATE `isSummaryState`  ← 候选: `state`
-
-**`harness/runtime/drive/structural.ts`** → `harness/runtime/drive/structural.rs`
-
-- PRIVATE `navigationBoundary`
-- PRIVATE `publishNestedRequestIntent`  ← 候选: `publish`
-- PRIVATE `publishNestedRequestOutcome`  ← 候选: `publish`
-- PRIVATE `readyFromRetryWait`
-- PRIVATE `requestStreamOptions`
-- PRIVATE `usageEvent`
-
-**`harness/runtime/drive/tool-placement.ts`** → `harness/runtime/drive/tool-placement.rs`
-
-- PRIVATE `isToolResultMessage`
-
-**`harness/runtime/drive/tools.ts`** → `harness/runtime/drive/tools.rs`
-
-- PRIVATE `findCall`
-- PRIVATE `resolveToolContext`
-
-**`harness/compaction/compaction.ts`** → `harness/compaction/compaction.rs`
-
-- PRIVATE `estimateTextAndImageContentChars`
-- PRIVATE `findValidCutPoints`
-- PRIVATE `getLastAssistantUsageInfo`  ← 候选: `get_last_assistant_usage`
-- PRIVATE `safeJsonStringify`
-
-**`harness/compaction/utils.ts`** → `harness/compaction/utils.rs`
-
-- PRIVATE `safeJsonStringify`
-
-**`harness/utils/shell-output.ts`** → `harness/utils/shell-output.rs`
-
-- PRIVATE `progressFrom`
-
-**`harness/utils/truncate.ts`** → `harness/utils/truncate.rs`
-
-- PRIVATE `replaceUnpairedSurrogates`
-
-**`harness/env/nodejs.ts`** → `harness/env/nodejs.rs`
-
-- PRIVATE `fileInfoFromStats`  ← 候选: `file_info_from`, `file_info`
-- PRIVATE `fileKindFromStats`
-- PRIVATE `findBashOnPath`
-- PRIVATE `getBashShellConfig`
-- PRIVATE `getShellConfig`
-- PRIVATE `getShellEnv`
-- PRIVATE `isLegacyWslBashPath`
-- PRIVATE `isNodeError`
-- PRIVATE `killProcessTree`
-- PRIVATE `pathExists`  ← 候选: `exists`
-- PRIVATE `resolvePath`
-- PRIVATE `resolveTimeoutMs`
-- PRIVATE `toFileError`
-- PRIVATE `waitForChildProcess`
-
-**`harness/session/jsonl/codec.ts`** → `harness/session/jsonl/codec.rs`
-
-- PRIVATE `isSafeIntegerAtLeast`
-
-**`harness/session/jsonl/io.ts`** → `harness/session/jsonl/io.rs`
-
-- PRIVATE `parseCommittedWrite`  ← 候选: `commit`, `write`
-- PRIVATE `requireSafeInteger`
-
-**`harness/session/jsonl/repo.ts`** → `harness/session/jsonl/repo.rs`
-
-- PRIVATE `metadataFromHeader`  ← 候选: `metadata`
-
 ## packages/ai → `crates/pi-ai/src`
 
-统计：配对 40 文件 · 文件缺失 0 · 范围外 151 · 符号缺失 107 · 符号移位 5 · 私有函数差异 68
+统计：配对 40 文件 · 文件缺失 0 · 范围外 155 · 符号缺失 102 · 符号移位 5 · 私有函数差异 69
 
 ### 1) 文件级缺失（范围内，Rust 侧无对应文件）
 
 （无）
 
-<details><summary>范围外文件 151 个（AGENT.md 已声明不复刻）</summary>
+<details><summary>范围外文件 155 个（AGENT.md 已声明不复刻）</summary>
 
 - `bedrock-provider.ts`
 - `bun-oauth.ts`
@@ -443,8 +115,8 @@
 - `providers/ant-ling.ts`
 - `providers/anthropic.models.ts`
 - `providers/anthropic.ts`
-- `providers/azure-openai-responses.models.ts`
-- `providers/azure-openai-responses.ts`
+- `providers/azure.models.ts`
+- `providers/azure.ts`
 - `providers/baseten.models.ts`
 - `providers/baseten.ts`
 - `providers/cerebras.models.ts`
@@ -530,10 +202,12 @@
 - `utils/oauth-page.ts`
 - `api/anthropic-messages.lazy.ts`
 - `api/anthropic-messages.ts`
+- `api/azure-openai-config.ts`
 - `api/azure-openai-responses.lazy.ts`
 - `api/azure-openai-responses.ts`
 - `api/bedrock-converse-stream.lazy.ts`
 - `api/bedrock-converse-stream.ts`
+- `api/classifier-shared.ts`
 - `api/cloudflare-ai-binding.ts`
 - `api/cloudflare-workers-ai-system-one.lazy.ts`
 - `api/cloudflare-workers-ai-system-one.ts`
@@ -552,6 +226,8 @@
 - `api/openai-codex-responses.lazy.ts`
 - `api/openai-codex-responses.ts`
 - `api/openai-completions.lazy.ts`
+- `api/openai-decisions.lazy.ts`
+- `api/openai-decisions.ts`
 - `api/openai-prompt-cache.ts`
 - `api/openai-responses-shared.ts`
 - `api/openai-responses.lazy.ts`
@@ -606,7 +282,7 @@
 **`types.ts`** → `types.rs`
 
 - MISSING `AnthropicAllowedFallbackModel` (type) → 期望 `anthropic_allowed_fallback_model`
-- MISSING `AnthropicMessagesCompat` (type) → 期望 `anthropic_messages_compat`
+- MISSING `AnthropicMessagesCompat` (type) → 期望 `anthropic_messages_compat`  ← 候选: `message`
 - MISSING `AnyModel` (type) → 期望 `any_model`
 - MISSING `ApiOptionsMap` (type) → 期望 `api_options_map`
 - MISSING `ApiStreamOptions` (type) → 期望 `api_stream_options`
@@ -648,10 +324,6 @@
 - MISSING `KnownImageApi` (type) → 期望 `known_image_api`
 - MISSING `KnownProvider` (type) → 期望 `known_provider`
 - MISSING `MistralConversationsCompat` (type) → 期望 `mistral_conversations_compat`
-- MISSING `ModelImageInputLimits` (type) → 期望 `model_image_input_limits`
-- MISSING `ModelImageResizeOptions` (type) → 期望 `model_image_resize_options`
-- MISSING `ModelInputLimits` (type) → 期望 `model_input_limits`
-- MISSING `ModelPromptCache` (type) → 期望 `model_prompt_cache`  ← 候选: `prompt`
 - MISSING `ModelType` (type) → 期望 `model_type`
 - MISSING `ModelTypeMap` (type) → 期望 `model_type_map`
 - MISSING `NestedToolCallRecord` (type) → 期望 `nested_tool_call_record`
@@ -662,13 +334,16 @@
 - MISSING `ProviderClassifier` (type) → 期望 `provider_classifier`
 - MISSING `ProviderImages` (type) → 期望 `provider_images`
 - MISSING `ProviderImagesOptions` (type) → 期望 `provider_images_options`
-- MISSING `ProviderResponse` (type) → 期望 `provider_response`
 - MISSING `ProviderStreamOptions` (type) → 期望 `provider_stream_options`
 - MISSING `ProviderStreams` (type) → 期望 `provider_streams`
 - MISSING `SessionAffinityFormat` (type) → 期望 `session_affinity_format`  ← 候选: `detect_session_affinity_format`
 - MISSING `TextSignatureV1` (type) → 期望 `text_signature_v1`  ← 候选: `encode_text_signature_v1`
 - MISSING `ThinkingTokenBudgetField` (type) → 期望 `thinking_token_budget_field`  ← 候选: `token`
 - MISSING `VercelGatewayRouting` (type) → 期望 `vercel_gateway_routing`
+
+**`auth/resolve.ts`** → `auth/resolve.rs`
+
+- MISSING `refreshStoredOAuthCredential` (fn) → 期望 `refresh_stored_o_auth_credential`  ← 候选: `refresh`
 
 **`auth/types.ts`** → `auth/types.rs`
 
@@ -687,15 +362,11 @@
 
 **`utils/transcript.ts`** → `utils/transcript.rs`
 
-- MISSING `TranscriptMessages` (type) → 期望 `transcript_messages`
-
-**`api/constrained-sampling.ts`** → `api/constrained-sampling.rs`
-
-- MISSING `UnsupportedStrictSchemaKeywordCheck` (type) → 期望 `unsupported_strict_schema_keyword_check`  ← 候选: `check`
+- MISSING `TranscriptMessages` (type) → 期望 `transcript_messages`  ← 候选: `message`
 
 **`api/openai-completions.ts`** → `api/openai-completions.rs`
 
-- MISSING `ConvertCompletionsMessagesOptions` (type) → 期望 `convert_completions_messages_options`
+- MISSING `ConvertCompletionsMessagesOptions` (type) → 期望 `convert_completions_messages_options`  ← 候选: `message`
 - MISSING `OpenAICompletionsOptions` (type) → 期望 `open_ai_completions_options`
 - MISSING `stream` (const) → 期望 `stream`  ← 候选: `stream_error`, `stream_simple`, `stream_request`, `stream_deferred`
 - <sub>移位 2 项：`convertMessages`, `streamSimple`</sub>
@@ -726,17 +397,18 @@
 **`providers/faux.ts`** → `providers/faux.rs`
 
 - PRIVATE `assistantContentToText`
-- PRIVATE `cloneMessage`  ← 候选: `clone`
+- PRIVATE `cloneMessage`  ← 候选: `message`, `clone`
 - PRIVATE `commonPrefixLength`
+- PRIVATE `commonPromptPrefixLength`  ← 候选: `prompt`
 - PRIVATE `contentToText`
-- PRIVATE `createAbortedMessage`  ← 候选: `aborted_message`, `aborted`, `abort`
-- PRIVATE `createDeferredMessage`
+- PRIVATE `createAbortedMessage`  ← 候选: `aborted_message`, `aborted`, `message`, `abort`
+- PRIVATE `createDeferredMessage`  ← 候选: `message`
 - PRIVATE `estimateTokens`  ← 候选: `token`
-- PRIVATE `messageToText`
+- PRIVATE `joinedLength`
+- PRIVATE `messageToText`  ← 候选: `message`
 - PRIVATE `normalizeFauxAssistantContent`
 - PRIVATE `randomId`
 - PRIVATE `scheduleChunk`
-- PRIVATE `serializeContext`  ← 候选: `serialize`
 - PRIVATE `splitStringByTokenSize`  ← 候选: `token`
 - PRIVATE `toolResultToText`  ← 候选: `result`
 - PRIVATE `withUsageEstimate`
@@ -772,7 +444,7 @@
 
 **`utils/transcript.ts`** → `utils/transcript.rs`
 
-- PRIVATE `isSystemMessage`
+- PRIVATE `isSystemMessage`  ← 候选: `message`
 
 **`utils/validation.ts`** → `utils/validation.rs`
 
@@ -781,10 +453,10 @@
 
 **`api/openai-completions.ts`** → `api/openai-completions.rs`
 
-- PRIVATE `addCacheControlToInstructionMessage`
-- PRIVATE `addCacheControlToLastConversationMessage`
+- PRIVATE `addCacheControlToInstructionMessage`  ← 候选: `message`
+- PRIVATE `addCacheControlToLastConversationMessage`  ← 候选: `message`
 - PRIVATE `addCacheControlToLastTool`
-- PRIVATE `addCacheControlToMessage`
+- PRIVATE `addCacheControlToMessage`  ← 候选: `message`
 - PRIVATE `addCacheControlToSystemPrompt`  ← 候选: `prompt`
 - PRIVATE `addCacheControlToTextContent`
 - PRIVATE `appendOpenAIReasoningDetail`
@@ -864,45 +536,379 @@
 - PRIVATE `rejectsWithSameValue`
 - PRIVATE `unreadable`
 
+## packages/durable → `crates/pi-durable/src`
+
+统计：配对 58 文件 · 文件缺失 9 · 范围外 0 · 符号缺失 59 · 符号移位 34 · 私有函数差异 32
+
+### 1) 文件级缺失（范围内，Rust 侧无对应文件）
+
+- `storage/sqlite/cloudflare.ts`
+- `storage/sqlite/database.ts`
+- `storage/sqlite/migrations.ts`
+- `storage/sqlite/node.ts`
+- `storage/sqlite/storage.ts`
+- `storage/jsonl/node.ts`
+- `testing/assertions.ts`
+- `testing/runner.ts`
+- `testing/types.ts`
+
+### 2) 符号级缺失（TS 有，Rust 整 crate 未见同名）
+
+
+**`documents.ts`** → `documents.rs`
+
+- MISSING `AnyDocDefinition` (type) → 期望 `any_doc_definition`  ← 候选: `definition`
+
+**`types.ts`** → `types.rs`
+
+- MISSING `CommonDocDefinition` (type) → 期望 `common_doc_definition`  ← 候选: `definition`
+- MISSING `ConversationDocFamilyToken` (type) → 期望 `conversation_doc_family_token`  ← 候选: `conversation`
+- MISSING `ConversationDocToken` (type) → 期望 `conversation_doc_token`  ← 候选: `conversation`
+- MISSING `DocDefinition` (type) → 期望 `doc_definition`  ← 候选: `definition`
+- MISSING `DocFamilyDefinition` (type) → 期望 `doc_family_definition`  ← 候选: `definition`
+- MISSING `LatestConversationSemantics` (type) → 期望 `latest_conversation_semantics`  ← 候选: `conversation`, `semantics`
+- MISSING `PhaseHandler` (type) → 期望 `phase_handler`  ← 候选: `phase`
+- MISSING `RewindableConversationDocFamilyToken` (type) → 期望 `rewindable_conversation_doc_family_token`  ← 候选: `conversation`
+- MISSING `RewindableConversationDocToken` (type) → 期望 `rewindable_conversation_doc_token`  ← 候选: `conversation`
+- MISSING `RewindableConversationSemantics` (type) → 期望 `rewindable_conversation_semantics`  ← 候选: `conversation`, `semantics`
+- MISSING `SessionDocFamilyToken` (type) → 期望 `session_doc_family_token`
+- MISSING `SessionDocToken` (type) → 期望 `session_doc_token`
+- MISSING `TaskDefinition` (type) → 期望 `task_definition`  ← 候选: `definition`
+- MISSING `TaskDocFamilyToken` (type) → 期望 `task_doc_family_token`
+- MISSING `TaskDocToken` (type) → 期望 `task_doc_token`
+- MISSING `TypedEntryDraft` (type) → 期望 `typed_entry_draft`  ← 候选: `entry`, `typed`
+- <sub>移位 9 项：`DocumentObserver`, `DocumentReader`, `DocumentState`, `DocumentWatch`, `HookRunner`, `NextTaskState`, `RunningTask`, `Session`, `TaskRuntime`</sub>
+
+**`tools/bash.ts`** → `tools/bash.rs`
+
+- MISSING `BashPrepare` (type) → 期望 `bash_prepare`  ← 候选: `prepare`
+- MISSING `BashToolInput` (type) → 期望 `bash_tool_input`
+- MISSING `PowerShellToolInput` (type) → 期望 `power_shell_tool_input`
+- MISSING `PowerShellToolOptions` (type) → 期望 `power_shell_tool_options`
+
+**`tools/edit.ts`** → `tools/edit.rs`
+
+- MISSING `EditToolInput` (type) → 期望 `edit_tool_input`
+
+**`tools/read.ts`** → `tools/read.rs`
+
+- MISSING `ReadToolInput` (type) → 期望 `read_tool_input`
+
+**`tools/write.ts`** → `tools/write.rs`
+
+- MISSING `WriteToolInput` (type) → 期望 `write_tool_input`
+
+**`storage/memory.ts`** → `storage/memory.rs`
+
+- MISSING `PreparedMemoryCommit` (type) → 期望 `prepared_memory_commit`  ← 候选: `prepare`, `commit`
+- MISSING `applyDocumentActions` (method) → 期望 `apply_document_actions`  ← 候选: `document`, `apply`
+- MISSING `applyPreparedCommit` (method) → 期望 `apply_prepared_commit`  ← 候选: `prepare`, `commit`, `apply`
+- MISSING `checkDocumentActions` (method) → 期望 `check_document_actions`  ← 候选: `document`
+- MISSING `checkGlobalIds` (method) → 期望 `check_global_ids`
+- MISSING `prepareCommit` (method) → 期望 `prepare_commit`  ← 候选: `prepare`, `commit`
+- MISSING `prepareDocumentActions` (method) → 期望 `prepare_document_actions`  ← 候选: `document`, `prepare`
+- MISSING `resolveDocumentCopies` (method) → 期望 `resolve_document_copies`  ← 候选: `document`, `resolve`
+- <sub>移位 1 项：`materializeDocument`</sub>
+
+**`storage/jsonl/storage.ts`** → `storage/jsonl/storage.rs`
+
+- MISSING `JsonlCorruptionError` (class) → 期望 `jsonl_corruption_error`
+- MISSING `JsonlStoragePoisonedError` (class) → 期望 `jsonl_storage_poisoned_error`  ← 候选: `poisoned_error`, `storage`, `poison`
+- MISSING `adoptSidecarState` (method) → 期望 `adopt_sidecar_state`  ← 候选: `adopt`, `state`
+- MISSING `confirmRecord` (method) → 期望 `confirm_record`  ← 候选: `record`
+- MISSING `planReclamations` (method) → 期望 `plan_reclamations`
+- MISSING `readLines` (method) → 期望 `read_lines`  ← 候选: `read_line`, `lines`
+- MISSING `reclaimSidecars` (method) → 期望 `reclaim_sidecars`
+- MISSING `recover` (method) → 期望 `recover`
+- MISSING `replaceSidecar` (method) → 期望 `replace_sidecar`  ← 候选: `replace`, `place`
+- MISSING `resolveFile` (method) → 期望 `resolve_file`  ← 候选: `resolve`
+- MISSING `store` (method) → 期望 `store`  ← 候选: `stored_bytes`, `restore_line_endings`, `items_round_trip_through_their_stored_json`, `select_extensions_uses_the_stored_array_when_present`
+- <sub>移位 2 项：`encodeCommit`, `poison`</sub>
+
+**`env/index.ts`** → `env/index.rs`
+
+- MISSING `Result` (type) → 期望 `result`  ← 候选: `result_of`, `tool_result`, `final_result`, `closed_result`
+- MISSING `err` (fn) → 期望 `err`
+- MISSING `getOrThrow` (fn) → 期望 `get_or_throw`
+- MISSING `getOrUndefined` (fn) → 期望 `get_or_undefined`
+- MISSING `ok` (fn) → 期望 `ok`
+- MISSING `toError` (fn) → 期望 `to_error`
+
+**`testing/env-conformance.ts`** → `testing/env_conformance.rs`
+
+- MISSING `createEnvConformance` (fn) → 期望 `create_env_conformance`  ← 候选: `create`
+
+**`testing/storage-conformance.ts`** → `testing/storage_conformance.rs`
+
+- MISSING `createStorageConformance` (fn) → 期望 `create_storage_conformance`  ← 候选: `storage`, `create`
+
+**`harness/compaction.ts`** → `harness/compaction.rs`
+
+- MISSING `CompactionTask` (const) → 期望 `compaction_task`  ← 候选: `make_compaction_task`, `compact`, `compaction_task_metadata_matches_upstream`
+
+**`harness/generation.ts`** → `harness/generation.rs`
+
+- MISSING `GenerationTask` (const) → 期望 `generation_task`  ← 候选: `make_generation_task`, `create_generation_task_id`, `generation_task_metadata_matches_upstream`
+- <sub>移位 1 项：`startRun`</sub>
+
+**`harness/registry.ts`** → `harness/registry.rs`
+
+- MISSING `BUILTIN_TASKS` (const) → 期望 `builtin_tasks`  ← 候选: `tasks`, `builtin_tasks_are_installed_in_the_snapshot`
+- <sub>移位 6 项：`extension`, `installed`, `sections`, `task`, `tasks`, `tools`</sub>
+
+**`harness/task-graph.ts`** → `harness/task_graph.rs`
+
+- MISSING `TaskGraphWatch` (type) → 期望 `task_graph_watch`  ← 候选: `task_graph`, `watch`
+
+**`harness/tool.ts`** → `harness/tool.rs`
+
+- MISSING `ToolTask` (const) → 期望 `tool_task`  ← 候选: `make_tool_task`, `tool_task_checkpoint_round_trips`, `tool_task_metadata_matches_upstream`
+
+**`harness/types.ts`** → `harness/types.rs`
+
+- MISSING `AnyTask` (type) → 期望 `any_task`
+- MISSING `HooksOf` (type) → 期望 `hooks_of`  ← 候选: `hooks`
+
+**`harness/usage.ts`** → `harness/usage.rs`
+
+- MISSING `addUsage` (fn) → 期望 `add_usage`  ← 候选: `usage`, `add_usage_json`, `add_usage_state`
+
+### 3) 私有顶层函数差异（TS 非导出实现函数，Rust 未见同名）
+
+> 上游 `function foo()` 这类非导出实现函数。Rust 常把它们内联进调用方，
+> 因此大量属于正常；但**真实缺口也藏在这里**——edit.ts 的 `prepareEditArguments`
+> 就是靠人工读到这一层才发现的（处理 `edits` 为字符串/单对象/legacy 顶层字段）。
+> 需人工逐条确认。
+
+
+**`documents.ts`** → `documents.rs`
+
+- PRIVATE `ownerId`
+
+**`tools/image.ts`** → `tools/image.rs`
+
+- PRIVATE `readUint16LE`
+- PRIVATE `readUint32BE`
+- PRIVATE `readUint32LE`
+
+**`env/line-scan.ts`** → `env/line_scan.rs`
+
+- PRIVATE `decodedBytes`  ← 候选: `decode`
+
+**`env/node-watch.ts`** → `env/node_watch.rs`
+
+- PRIVATE `isNodeError`  ← 候选: `is_node_error_kind`
+
+**`env/node.ts`** → `env/node.rs`
+
+- PRIVATE `fileInfoFromStats`  ← 候选: `file_info`
+- PRIVATE `fileKindFromStats`
+- PRIVATE `findBashOnPath`
+- PRIVATE `getBashShellConfig`
+- PRIVATE `getShellConfig`
+- PRIVATE `getShellEnv`
+- PRIVATE `isLegacyWslBashPath`
+- PRIVATE `isNodeError`  ← 候选: `is_node_error_kind`
+- PRIVATE `pathExists`  ← 候选: `exists`
+- PRIVATE `waitForChildProcess`  ← 候选: `process`
+
+**`testing/env-conformance.ts`** → `testing/env_conformance.rs`
+
+- PRIVATE `abortedContext`  ← 候选: `aborted`, `context`, `abort`, `waiters_reject_an_already_aborted_context`
+- PRIVATE `covers`  ← 候选: `failed_outcome_covers_held_and_terminal_failures`
+- PRIVATE `errorCode`
+- PRIVATE `readAll`
+- PRIVATE `watching`  ← 候选: `watch`
+
+**`testing/storage-conformance.ts`** → `testing/storage_conformance.rs`
+
+- PRIVATE `assertionFacade`
+- PRIVATE `createCase`  ← 候选: `create`
+
+**`harness/agent.ts`** → `harness/agent.rs`
+
+- PRIVATE `isList`
+- PRIVATE `names`  ← 候选: `names_json`, `sidecar_file_names_are_validated`, `summary_failure_names_the_reason`, `marker_json_uses_upstream_field_names`
+
+**`harness/compaction.ts`** → `harness/compaction.rs`
+
+- PRIVATE `contentText`  ← 候选: `content_text_of_user`, `content_text_of_blocks`
+
+**`harness/context.ts`** → `harness/context.rs`
+
+- PRIVATE `freezeJson`
+
+**`harness/generation.ts`** → `harness/generation.rs`
+
+- PRIVATE `createToolTask`  ← 候选: `create`
+
+**`harness/scheduler.ts`** → `harness/scheduler/mod.rs`
+
+- PRIVATE `delay`  ← 候选: `progress_delays_the_next_commit_by_the_minimum_interval`, `schedule_expiry_clamps_a_late_expiry_to_the_maximum_delay`
+- PRIVATE `erased`
+- PRIVATE `sessionMethod`
+
+**`session/observation.ts`** → `session/observation.rs`
+
+- PRIVATE `toError`
+
+## packages/chord → `crates/pi-durable/src/chord`
+
+统计：配对 4 文件 · 文件缺失 5 · 范围外 20 · 符号缺失 15 · 符号移位 1 · 私有函数差异 11
+
+### 1) 文件级缺失（范围内，Rust 侧无对应文件）
+
+- `delta/apply-immutable-trusted.ts`
+- `delta/tracker.ts`
+- `services/state-codec.ts`
+- `services/state-internals.ts`
+- `services/state.ts`
+
+<details><summary>范围外文件 20 个（AGENT.md 已声明不复刻）</summary>
+
+- `api.ts`
+- `bundler.ts`
+- `node.ts`
+- `types.ts`
+- `delta/diff.ts`
+- `delta/draft.ts`
+- `delta/revision-validator.ts`
+- `facets/host.ts`
+- `facets/loader.ts`
+- `node/bundle-loader.ts`
+- `node/bundle.ts`
+- `node/manifest.ts`
+- `node/package.ts`
+- `services/consumer.ts`
+- `services/errors.ts`
+- `services/handle.ts`
+- `services/instances.ts`
+- `services/loopback.ts`
+- `services/provider.ts`
+- `services/wire.ts`
+
+</details>
+
+### 2) 符号级缺失（TS 有，Rust 整 crate 未见同名）
+
+
+**`json.ts`** → `json.rs`
+
+- MISSING `CopyJsonOptions` (type) → 期望 `copy_json_options`  ← 候选: `copy_json`
+- MISSING `isJsonValue` (fn) → 期望 `is_json_value`  ← 候选: `value`
+
+**`delta/index.ts`** → `delta.rs`
+
+- MISSING `NonEmptyPath` (type) → 期望 `non_empty_path`
+- MISSING `PathError` (class) → 期望 `path_error`
+- MISSING `PathRef` (type) → 期望 `path_ref`
+- MISSING `RESERVED_SEGMENTS` (const) → 期望 `reserved_segments`
+- MISSING `Seg` (type) → 期望 `seg`
+- MISSING `UnsafePathError` (class) → 期望 `unsafe_path_error`
+- MISSING `assertValidOp` (fn) → 期望 `assert_valid_op`
+- MISSING `assertValidWireOp` (fn) → 期望 `assert_valid_wire_op`
+- MISSING `isBase` (const) → 期望 `is_base`
+- MISSING `isReplace` (const) → 期望 `is_replace`  ← 候选: `replace`
+
+**`context/index.ts`** → `context.rs`
+
+- MISSING `createContextKey` (fn) → 期望 `create_context_key`
+- MISSING `toString` (method) → 期望 `to_string`
+- MISSING `withContextValue` (fn) → 期望 `with_context_value`  ← 候选: `value`
+- <sub>移位 1 项：`value`</sub>
+
+### 3) 私有顶层函数差异（TS 非导出实现函数，Rust 未见同名）
+
+> 上游 `function foo()` 这类非导出实现函数。Rust 常把它们内联进调用方，
+> 因此大量属于正常；但**真实缺口也藏在这里**——edit.ts 的 `prepareEditArguments`
+> 就是靠人工读到这一层才发现的（处理 `edits` 为字符串/单对象/legacy 顶层字段）。
+> 需人工逐条确认。
+
+
+**`json.ts`** → `json.rs`
+
+- PRIVATE `check`
+- PRIVATE `copy`
+- PRIVATE `defineData`
+
+**`delta/index.ts`** → `delta.rs`
+
+- PRIVATE `applyOps`  ← 候选: `apply`
+- PRIVATE `assertIndexInRange`  ← 候选: `index`
+- PRIVATE `assertPathArg`
+- PRIVATE `assertPermutation`
+- PRIVATE `copyContainers`
+- PRIVATE `resolve`  ← 候选: `resolve_mut`, `resolve_parent_mut`
+- PRIVATE `resolveValue`  ← 候选: `value`
+
+**`context/index.ts`** → `context.rs`
+
+- PRIVATE `abortError`  ← 候选: `abort`
+
 ---
 
 # 人工复核结论
 
 > 上方是机械扫描结果。本节的职责只有两件事：**(1) 说明哪些 MISSING 是假阳性，(2) 列出仍未对齐的项**。
 > 已对齐项的改动明细见 git 历史，此处不再保留。
+> 本轮已按 v1.1.0 新架构重跑扫描，并逐类人工复核过；P10 又做了一次双向
+> （TS→Rust 缺失 + Rust→TS 多余）逐文件逐方法审计并修复，结论见 `tools.d/parity/AUDIT-REPORT.md`。
 
 ## 一、机械扫描的已知假阳性（非遗漏）
 
 以下类别扫描器会报 MISSING，但 Rust 侧已有等价实现：
 
-- **宏生成**：`harness/result.ts` 的 13 个错误类由 `result.rs` 的 `tagged_error!` 宏生成。
-- **语言替换**：TS 的 `Result`/`ok`/`err` → Rust 标准库 `Result`；`utf8ByteLength` → `str::len()`。
-- **类型合并**：`session/types.ts` 的 16 个 `*Operation` 接口 → `OperationState` enum variants。
-- **类型级编程**：`pi-telemetry` 的 12 项（条件 / 映射类型 / `UnionToIntersection`）与
-  `harness/telemetry.ts` 的 16 个 span 类型（`TelemetrySchemaSpanName<typeof SCHEMA>` 推导）
-  —— Rust 无对应能力，运行时行为一致（`start_ai_span` / `start_harness_span` / 两个 `*_SCHEMA` 都在）。
-- **命名适配**：`restoreSession`→`restore_session_arc`、`captureLaneSnapshot`→`capture_lane_snapshot_inner`、
-  `setConfiguration`→`set_configuration_identity`、`requestOperationAbort`→`request_abort`、
-  `operationScopeOf`→`OperationState::scope()` 等。
-- **内联实现**：第 3 节的私有函数档多属此类（如 prompt-templates 的 3 个加载函数内联进
-  `load_prompt_templates`、skills 的 `loadSkillsFromDirInternal`→`load_skills_from_dir_inner`）。
-- **范围外**：`pi-ai` 107 项中的绝大多数（Classifier / Images / 各厂商 Compat / Routing）。
+- **重载拆分 / 命名适配**：agent 的 `prompt`（字符串/消息重载）→ `prompt_text` /
+  `prompt_text_with_images` / `prompt_messages`，`continue` → `continue_turn`；
+  `steeringMode` / `followUpMode` getter/setter → `set_steering_mode` / `steering_mode` /
+  `set_follow_up_mode` / `follow_up_mode` 访问器（P10 补全）；`restoreSession`→`restore_session_arc` 等。
+- **类型合并**：durable `types.ts` 的 `*DocToken` / `*DocDefinition` / `*DocFamilyToken` /
+  `*Semantics` 十几项 → `DocToken` / `DocDefinitionSpec` / `DocumentSemantics` 等合并类型；
+  `AnyTask` / `HooksOf` 是条件类型推导，Rust 无对应能力。
+- **语言机制豁免**：`env/index.ts` 的 `Result` / `ok` / `err` / `getOrThrow` / `getOrUndefined` /
+  `toError` → Rust 标准库 `Result`；chord `json.ts` 的 `isJsonValue` / `omitUndefinedProperties` →
+  Rust `serde_json::Value` 类型系统保证严格 JSON（无 `undefined`/cycle/symbol），序列化时用
+  `skip_serializing_if` 剔除；chord `context` 的 `createContextKey` / `withContextValue` → pi-durable 不用
+  （`context.rs` 已声明只实现 `abortSignal`）。
+  （chord `delta` 的 `WireOp` / `Encoder` / `Decoder` path-interning 已由 P10 补全，不再是 serde 替代。）
+- **类型级编程**：`pi-telemetry` 的 12 项与 `harness/types.ts` 的 span 推导类型；tools 的
+  `*ToolInput` 是 TypeBox schema 推导，Rust 用 JSON schema + 运行时校验。
+- **合并函数**：`storage/memory.ts` 的 `prepareCommit` / `applyPreparedCommit` / `checkGlobalIds` /
+  `checkDocumentActions` / `prepareDocumentActions` / `resolveDocumentCopies` / `applyDocumentActions`
+  → `validate_writes` + `apply_writes`；`storage/jsonl` 的 `JsonlCorruptionError` /
+  `JsonlStoragePoisonedError` → `StorageError` 变体。
+- **工厂模式**：`harness/compaction.ts` 的 `CompactionTask`、`generation.ts` 的 `GenerationTask`、
+  `tool.ts` 的 `ToolTask`、`registry.ts` 的 `BUILTIN_TASKS` 这些模块级 const → Rust 用
+  `make_*_task()` 工厂 + `create_registry()` 里的 `OnceLock` 组装（Rust 无模块级可变初始化）。
+- **内联实现**：第 3 节私有函数档多属此类（`isList`/`names`→`names_json`、`freezeJson`→Rust
+  owned 值、`createToolTask`→registry 组装、`fileInfoFromStats`/`fileKindFromStats`→
+  `file_info_from_metadata`、`decodedBytes`→`str::len()`、`readUint*`→`read_u*` 等）。
+- **文件合并**：chord 的 `delta/apply-immutable-trusted.ts` / `delta/index.ts` → `delta.rs`，
+  `delta/tracker.ts` → `tracker.rs`，`services/state*.ts` → `state.rs`（扫描配对规则未识别 1:N 合并）。
+- **范围外**：`pi-ai` 108 项中的绝大多数（155 个范围外文件：其他 provider / Classifier /
+  Images / 各厂商 Compat / Routing / OAuth 登录流程）；chord 的 `facets`/`node`/`services` 其余。
+- **durable 9 个「文件级缺失」是已知豁免**：`storage/sqlite/{cloudflare,database,node,migrations}.ts`
+  与 `storage/jsonl/node.ts` 是跨运行时异步 facade（不复刻 / 语言机制豁免）；
+  `storage/sqlite/storage.ts`（934 行）已合并进 `storage/sqlite.rs`（1:N）；
+  `testing/{assertions,runner}.ts` 是 JS 测试适配器；`testing/types.ts` 已合并进
+  `storage_conformance.rs` / `env_conformance.rs`。
 
-## 二、仍未对齐的项
+## 二、仍未对齐的项（P10 双向审计后）
 
 详情与工作量见 `todos.md`：
 
-- **B1** Node 平台细节（`findBashOnPath` / WSL 检测 / `killProcessTree`）—— `std::process` 已等价覆盖，不搬。
-- **B2 / C5** 一致性测试套件（conformance + benchmark + storage 装饰器，约 2,275 行）—— 测试基建。
-- **B3** legacy-v3 JSONL 迁移 —— **用户明确要求不复刻**。
-- **C2** `harness/telemetry.ts` 的 16 个 span 类型 —— 类型级推导，豁免。
+- **B1** Node 平台细节（`findBashOnPath` / WSL 检测 / `getShellConfig` 的 Windows 分支）——
+  macOS/Linux 下 `std::process` 已等价覆盖，Windows 分支不在本项目范围。
+- **C2** `pi-telemetry` 的类型级推导 12 项 —— 豁免。
 - **C3** session 4 个具名错误 —— 消息已逐字对齐、上游无 `instanceof` 分支，不建议投入。
-- **上游能力偏差**：`onProviderStreamEvent` / Z.AI CN overflow / HTTP-date `Retry-After`。
+- **storage-benchmark**（489 行）—— 性能基准，非正确性验证，待续（可选）。
+- **上游能力偏差**：Z.AI CN overflow / HTTP-date `Retry-After`。
+  （`onProviderStreamEvent` 已在 P10 补全，不再列为偏差。）
 
 ## 三、扫描口径与已知盲区
 
 - 符号匹配用「去分隔符 + 小写」的 compact 键，因此 `lazyOAuth` ↔ `lazy_oauth` 这类缩写差异不会误报。
 - `local`（同文件命中）视为 OK；`global`（同 crate 其他文件）记为「移位」；整 crate 无同名记 MISSING。
-- 第 3 节的私有函数档覆盖上游非导出 `function`，是导出符号扫描的补充 ——
-  历史上正是靠人工读到这一层才发现 edit 的 `prepareEditArguments` 缺口。
-- **已知盲区**：`tagged_error!` 等宏生成的类型扫不到（见第一节）；Rust 侧内联实现无法自动识别。
+- 第 3 节的私有函数档覆盖上游非导出 `function`，是导出符号扫描的补充。
+- **已知盲区**：`tagged_error!` 等宏生成的类型扫不到（见第一节）；Rust 侧内联实现无法自动识别；
+  1:N 文件合并（如 chord `delta/index.ts` + `apply-immutable-trusted.ts` → `delta.rs`）扫不到。

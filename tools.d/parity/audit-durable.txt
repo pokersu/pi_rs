@@ -1,0 +1,188 @@
+# 审计简报：packages/durable → crates/pi-durable/src
+
+范围：完整复刻
+
+
+## 文件配对表
+
+- `documents.ts` → `documents.rs`
+- `entries.ts` → `entries.rs`
+- `errors.ts` → `errors.rs`
+- `ids.ts` → `ids.rs`
+- `index.ts` → `lib.rs`
+- `tasks.ts` → `tasks.rs`
+- `truncate.ts` → `truncate.rs`
+- `types.ts` → `types.rs`
+- `tools/bash.ts` → `tools/bash.rs`
+- `tools/edit-diff.ts` → `tools/edit_diff.rs`
+- `tools/edit.ts` → `tools/edit.rs`
+- `tools/env.ts` → `tools/env.rs`
+- `tools/file-mutation-queue.ts` → `tools/file_mutation_queue.rs`
+- `tools/image.ts` → `tools/image.rs`
+- `tools/index.ts` → `tools/mod.rs`
+- `tools/path-utils.ts` → `tools/path_utils.rs`
+- `tools/read.ts` → `tools/read.rs`
+- `tools/write.ts` → `tools/write.rs`
+- `storage/memory.ts` → `storage/memory.rs`
+- `storage/scan.ts` → `storage/scan.rs`
+- `storage/sqlite/index.ts` → `storage/sqlite.rs`
+- `storage/jsonl/index.ts` → `storage/jsonl/mod.rs`
+- `storage/jsonl/storage.ts` → `storage/jsonl/storage.rs`
+- `env/decode.ts` → `env/decode.rs`
+- `env/index.ts` → `env/index.rs`
+- `env/line-scan.ts` → `env/line_scan.rs`
+- `env/node-watch.ts` → `env/node_watch.rs`
+- `env/node.ts` → `env/node.rs`
+- `testing/env-conformance.ts` → `testing/env_conformance.rs`
+- `testing/index.ts` → `testing/mod.rs`
+- `testing/storage-benchmark.ts` → `testing/storage_benchmark.rs`
+- `testing/storage-conformance.ts` → `testing/storage_conformance.rs`
+- `harness/agent.ts` → `harness/agent.rs`
+- `harness/compaction.ts` → `harness/compaction.rs`
+- `harness/context.ts` → `harness/context.rs`
+- `harness/define.ts` → `harness/define.rs`
+- `harness/events.ts` → `harness/events.rs`
+- `harness/generation.ts` → `harness/generation.rs`
+- `harness/harness.ts` → `harness/harness.rs`
+- `harness/inbox.ts` → `harness/inbox.rs`
+- `harness/json.ts` → `harness/json.rs`
+- `harness/live.ts` → `harness/live.rs`
+- `harness/output.ts` → `harness/output.rs`
+- `harness/prompt.ts` → `harness/prompt.rs`
+- `harness/provider.ts` → `harness/provider.rs`
+- `harness/registry.ts` → `harness/registry.rs`
+- `harness/scheduler.ts` → `harness/scheduler/mod.rs`
+- `harness/submissions.ts` → `harness/submissions.rs`
+- `harness/task-graph.ts` → `harness/task_graph.rs`
+- `harness/tool.ts` → `harness/tool.rs`
+- `harness/types.ts` → `harness/types.rs`
+- `harness/usage.ts` → `harness/usage.rs`
+- `harness/util.ts` → `harness/util.rs`
+- `harness/view.ts` → `harness/view.rs`
+- `session/forks.ts` → `session/forks.rs`
+- `session/observation.ts` → `session/observation.rs`
+- `session/session.ts` → `session/session.rs`
+- `session/transaction.ts` → `session/transaction.rs`
+
+未配对（范围内 TS 文件在 Rust 侧无对应）：
+- `storage/sqlite/cloudflare.ts`
+- `storage/sqlite/database.ts`
+- `storage/sqlite/migrations.ts`
+- `storage/sqlite/node.ts`
+- `storage/sqlite/storage.ts`
+- `storage/jsonl/node.ts`
+- `testing/assertions.ts`
+- `testing/runner.ts`
+- `testing/types.ts`
+
+## 正向差异（TS 符号在 Rust 侧 local/moved/missing）
+
+**`types.ts`**
+  - moved: DocumentObserver, DocumentReader, DocumentState, DocumentWatch, Entry, HookRunner, NextTaskState, RunningTask, Session, TaskRuntime
+  - missing: CommonDocDefinition(type), ConversationDocFamilyToken(type), ConversationDocToken(type), DocDefinition(type), DocFamilyDefinition(type), LatestConversationSemantics(type), PhaseHandler(type), RewindableConversationDocFamilyToken(type), RewindableConversationDocToken(type), RewindableConversationSemantics(type), SessionDocFamilyToken(type), SessionDocToken(type), TaskDefinition(type), TaskDocFamilyToken(type), TaskDocToken(type), TypedEntryDraft(type)
+**`tools/bash.ts`**
+  - missing: BashExecution(type), BashPrepare(type), BashToolInput(type), PowerShellToolInput(type), PowerShellToolOptions(type)
+**`tools/edit.ts`**
+  - missing: EditToolInput(type)
+**`tools/read.ts`**
+  - missing: ReadToolInput(type)
+**`tools/write.ts`**
+  - missing: WriteToolInput(type)
+**`storage/memory.ts`**
+  - missing: PreparedMemoryCommit(type)
+**`storage/jsonl/storage.ts`**
+  - moved: encodeCommit, poison
+  - missing: JsonlCorruptionError(class), adoptSidecarState(method), confirmRecord(method), planReclamations(method), readLines(method), reclaimSidecars(method), recover(method), replaceSidecar(method), resolveFile(method), store(method)
+**`env/index.ts`**
+  - missing: Result(type), ok(fn)
+**`testing/env-conformance.ts`**
+  - missing: createEnvConformance(fn)
+**`testing/storage-conformance.ts`**
+  - missing: createStorageConformance(fn)
+**`harness/agent.ts`**
+  - moved: DEFAULT_RETRY_POLICY
+**`harness/compaction.ts`**
+  - missing: CompactionTask(const)
+**`harness/generation.ts`**
+  - missing: GenerationTask(const)
+**`harness/harness.ts`**
+  - moved: Harness
+**`harness/registry.ts`**
+  - moved: extension, installed, sections, task, tasks, tools
+  - missing: BUILTIN_TASKS(const)
+**`harness/scheduler.ts`**
+  - moved: InvocationBinding, SchedulerOutcome, TaskScheduler, TaskSchedulerOptions
+**`harness/task-graph.ts`**
+  - missing: TaskGraphWatch(type)
+**`harness/tool.ts`**
+  - missing: ToolTask(const)
+**`harness/types.ts`**
+  - moved: Registry
+  - missing: AnyTask(type), HooksOf(type)
+
+## 反向候选（Rust pub 符号在范围内 TS 未见同名，含噪音）
+
+- `chord/context`: BACKGROUND_CONTEXT, EmptyContext, TODO_CONTEXT, abort_signal, await_with_context, describe, with_abort_signal, with_cancel, without_abort_signal
+- `chord/delta`: DeltaError, Op, Path, PathSegment, apply, apply_immutable, apply_immutable_batches, apply_in_place, overlap
+- `chord/json`: copy_json
+- `chord/state`: AttachedReplicatedState, DeliveryKind, MAX_PENDING_DELIVERIES, ReplicatedState, ReplicatedStateDelivery, ReplicatedStatePublisher, ReplicatedStateSource, ReplicatedStateSourceAttachment, ReplicatedStateSourceFrame, SourceListener, StateErrorReporter, StateListener, StateSubscriber, Subscription, attach_replicated_state_source, drain, service_delivery_context, subscribe_source, subscriber_count, unsubscribe
+- `chord/tracker`: Change, MAX_DELTA_OPERATIONS, Prepared, Tracker, adopt, append, base, base_revision, begin_change, delete, into_parts, into_value, is_empty, move_items, ops, prepare, prepare_replace, record, revision, set, splice, track, truncate
+- `documents`: AnyDocToken, DocError, HasDocumentScope, ResolvedAddress, address_id, check_record_scope, check_record_version, define_doc_family, definition, initial, is_family, kind, materialize_document, materialize_document_value, record_fork, record_history, record_id, record_kind, record_scope, resolve_address, semantics, version
+- `entries`: ASSISTANT_ENTRY, COMPACTION_ENTRY, CompactionData, DefinedEntry, DiagnosticSeverity, RESET_ENTRY, SYSTEM_ENTRY, TOOL_RESULT_ENTRY, ToolResultData, USER_ENTRY, is
+- `env/decode`: StreamDecoder, starts_with_bom
+- `env/index`: BinaryReader, DirReader, ExecutionEnv, ExecutionError, ExecutionErrorCode, FileError, FileErrorCode, FileKind, FileSystem, FileWatcher, LineScan, RemoveOptions, Shell, ShellCommand, ShellExecOptions, ShellExecResult, ShellOutputCallback, ShellOutputInfo, ShellOutputSkip, ShellOutputStream, ShellOutputWindow, ShellSpillOptions, TextLine, TextLineReader, WatchChange, WatchExclude, WatchMode, WatchTarget
+- `env/line_scan`: begin, end_first_line, end_selection, feed, finish, process
+- `env/node`: cwd, read_line_sync, resolve, with_shell, with_watch_options
+- `env/node_watch`: current_mode, mode
+- `env/testing`: InMemoryFileSystem, cwd, not_found, put
+- `errors`: ConversationBusy, StorageRejected
+- `harness/agent`: AGENT_DOC, INSTRUCTIONS_KEY, add_tools, agent_hooks, apply_change, checkpoint_when, create_agent, execute, initial, kind, parameters, resolve_settings, semantics, version
+- `harness/compaction`: CreateCompaction, CreateCompactionFn, SUMMARIZATION_PROMPT, SUMMARIZATION_SYSTEM_PROMPT, SUMMARY_PREFIX, SUMMARY_SUFFIX, TOOL_RESULT_MAX_CHARS, complete, estimate_context, fail_no_model, initial, make_compaction_task, make_create_compaction, phases, place, place_summary, run_phase, run_retry, run_select, run_summarize, select_cut, serialize_conversation, stream_options, summarized_messages, thinking_level, version
+- `harness/context`: EntryRange, query
+- `harness/define`: RenderSection, SectionOptions, SectionRenderer, execute, execution_mode, initial, is_tagged, key, parameters, phases, render, version, wrap_section, wrap_tool
+- `harness/events`: EventBatchListener, Parts, QueuedItem, QueuedMode, SnapshotGeneration, SnapshotRun, ToolOutputUpdate, ToolUpdate, message_changes, parts, publication, queued, result_of, snapshot_of, tool_update, translate
+- `harness/generation`: ThresholdOver, answer, append_assistant_static, classify, convert_partial, convert_partial_static, fail_model_error, fail_no_model, finish_tool_round, hand_over, initial, make_generation_task, make_start_run, phases, run_phase, run_poll, run_prepare, run_request, run_retry, run_tools, start_tool_round, stream_response, threshold_compaction, version
+- `harness/harness`: HarnessImpl, assert_open, bind, create, self_arc
+- `harness/inbox`: Boundary, BoundaryAt, BoundaryResult, InboxInputMode, QueueModes, apply_boundary, as_str, checkpoint_when, from_json, from_settings, initial, is_input, is_stale, kind, prepare_boundary, remove_inbox_item, semantics, to_json, user_entry_draft, version, withdraw_queued_inputs
+- `harness/json`: JsonKey, assign_json_name, is_record, omit_null_members, to_json_without_nulls
+- `harness/live`: COMPACTION_TASK_KIND, DeferredPoll, LiveGeneration, LiveRun, RUN_TASK_KINDS, RetryBackoff, TOOL_TASK_KIND, ToolSlotStatus, add_compaction_status, checkpoint_when, clear_progress, compaction_status_index, end_run, finish_slot, initial, kind, remove_compaction_status, semantics, settle_scheduler_outcome, tool_slot_index, version
+- `harness/output`: OutputBuffer, OutputChunk, PROGRESS_BYTES_PER_SECOND, Progress, ProgressErrorReporter, ProgressWaiter, ProgressWrite, Retain, accept, bound_output, character_end, finish, from_window, reject, resolve, schedule, skip, wake
+- `harness/prompt`: SectionPatch, ToolChanges, is_empty, plan_sections, plan_system_entries, plan_tools, render_sections
+- `harness/provider`: checkpoint_when, ensure_provider_session_id, initial, kind, semantics, version
+- `harness/registry`: build_snapshot, key, notify, render
+- `harness/scheduler/exec`: AbortResult, Invocation, InvocationMode, SchedulerAgent, SchedulerConversation, SchedulerEnv, SchedulerNow, SchedulerReport, SchedulerSettings, SchedulerSettleOutcome, SchedulerWithdrawInputs, TaskSchedulerInner, abort_conversation, any_failed, apply_expiry_plan, commit_state, commit_step, create_invocation, decide, done, drain, drain_inner, env, finalize, finish, gated, handlers, hooks, idle, is_closing, is_enabled, is_ended, kick, load_chain, load_scopes, memo, memo_or, models, now, observe, outcomes, reconcile, report, reserve, run_abort, run_reservation, runtime, schedule_expiry, schedule_reconcile, seal, settle_idle, signal, sleep, step, terminate, validate_wait
+- `harness/scheduler/expiry`: ExpiryPlan, IdleKey, MAX_TIMER_DELAY, context_retention_ms, schedule_expiry, settle_idle
+- `harness/scheduler/ownership`: AnyTaskRecord, BlockedReason, Fit, Overlay, OwnerLookup, Scope, Step, TaskNode, Up, above, below_cancelled, can_reserve, cancellation_intent, chain_known, edge, failed_outcome, has_migrate, idle, in_scope, initial, json_equal, live_records, memo_of, node, node_of, overlay_of, owned_live, parent_of, phases, version, with_edge, with_node, with_state
+- `harness/scheduler/reserve`: Resolution, ResolutionOutcome, fit, has_migrate, initial, inspect_task, migrate, missing_migration, phases, resolve, version, waiting_on
+- `harness/scheduler/state`: FailedMigration, KeptContext, ObserveOutcome, SchedulerState, above, below_cancelled, chain_known, edge, idle, in_scope, kick, live_records, node, observe, owned_live, schedule_reconcile, set_edge, task_node
+- `harness/submissions`: AbortResult, StartRun, StartRunFn, SubmissionsOptions, admit_submission, is_settled, observe
+- `harness/task_graph`: TaskOutcomeStatus, build, phase
+- `harness/tool`: append_tool_result, call_id, create_task, details, diagnostic, env, final_result, harness_error, initial, make_tool_task, memo, memo_or, models, output, output_window, phases, publish_progress, run_call, run_execute, run_phase, settle, version
+- `harness/types`: BeforeCompact, BeforeToolResult, CommitOperation, CompactDecision, DEFAULT_COMPACTION_POLICY, DEFAULT_CONTEXT_RETENTION_MS, DEFAULT_PROGRESS_POLICY, DeferredOptions, DeferredWindow, EnvBuilder, ExtensionChangeSelection, ExtensionStateSelection, FieldChange, GenerationContinuation, GenerationRequest, HarnessAbortSubmission, HookHandlers, PartialCompactionPolicy, PartialProgressPolicy, PartialRetryPolicy, Replay, RuntimeHookApi, SchedulingState, SectionWrapper, SubmissionAbort, TaskAbort, TaskBlockedReason, TaskCommit, TaskCreationOptions, TaskInspectionState, ToolChangeSelection, ToolDiagnosticSeverity, ToolStateSelection, ToolWrapper, WhenBusy, WriteSubmissionDraft, from_options, into_record, into_value, is_unchanged, memo, memo_or, models, record, with_conversation
+- `harness/usage`: UsageBucket, add_usage_json, add_usage_state, as_key, checkpoint_when, initial, kind, record_usage, semantics, usage_to_json, version
+- `harness/util`: add, closed_error, forget, reject_all, resolve, scan_all
+- `harness/view`: ReleaseHandle, ReleaseSlot, build, from_slot, into_release, set
+- `ids`: IdBrand, from_number, seq_from_number
+- `session/forks`: as_fork
+- `session/mod`: SessionError
+- `session/observation`: CommittedWatch, drain, json_to_observed, observed_to_json
+- `session/session`: CloseListener, CommitListener, DefaultSessionHooks, SessionHooks, SessionImpl, SessionOptions, SessionSubscription, assert_healthy, attach_state_source, attach_watch, cached, create, create_with_hooks, default_now, drain_line, ensure_closing, evict, is_closing, load, load_document, now, poison_error, run_commit, self_arc, self_weak, set, unsubscribe
+- `session/transaction`: AnyTaskRecord, SubmissionChange, acquire, acquire_fork_copy, adopt, append_entry, apply_submission_change, assemble, assert_open, assert_task_documents_open, begin_write, committed_task, create_root_conversation, create_submission, create_task, current_task, discard, doc, find_retirement, fork_conversation, host, latest_head_marker, place_submission, reject_fork_source_writes, require_conversation, retire_doc, scope, set_task, settle_failure, settle_submission, settle_success, stage_conversation, staged_conversations, staged_tasks, validate_owners
+- `storage/jsonl/codec`: EncodeError, EncodedCommit, FORMAT_VERSION, MAIN_FILE, MainMarker, MainOperation, MarkerKind, RECLAIM_SUFFIX, RecordKind, SidecarKind, SidecarPayload, SidecarRecord, StoredTask, is_current_only, is_reclaim_file_name, is_sidecar_file_name, prefix, sidecar_file_name, sidecar_key
+- `storage/jsonl/storage`: JsonlStorage, entry_in_conversation, record_failure, write_commit
+- `storage/memory`: as_str, assert_open, entry_in_conversation, validate_writes
+- `storage/scan`: ScanError
+- `storage/sqlite`: apply, assert_open, bump_counter, connection_for, entry_in_conversation, from_connection, open_in_memory, read_counter
+- `tasks`: initial, phases, version
+- `testing/env_conformance`: env_conformance_cases
+- `testing/storage_benchmark`: StorageBenchmarkDataset, StorageReadBenchmark, StorageReadBenchmarkRun, StorageWriteBenchmark, StorageWriteBenchmarkRun, background_context, seed_storage_benchmark, seed_storage_write_benchmark, storage_benchmark_primary_record_count, storage_read_benchmarks, storage_write_benchmarks
+- `testing/storage_conformance`: storage_conformance_cases
+- `tools/bash`: create_powershell_tool, execute, parameters
+- `tools/edit`: execute, parameters, prepare_arguments
+- `tools/edit_diff`: AppliedEditsResult, Edit, FuzzyMatchResult, apply_edits_to_normalized_content, fuzzy_find_text, generate_diff_string, generate_unified_patch, normalize_for_fuzzy_match, normalize_to_lf, restore_line_endings, split_lines_with_endings, strip_bom
+- `tools/image`: detect_supported_image_mime_type
+- `tools/path_utils`: resolve_read_tool_path
+- `tools/read`: TruncationDetails, execute, parameters
+- `tools/write`: execute, parameters
+- `truncate`: TruncatedBy, format_size, truncate_head, truncate_head_of
+- `types`: ClosedWatch, ConversationFork, ConversationHistory, ConversationKind, ConversationOwner, ConversationParent, DocAccess, DocDefinitionSpec, DocumentBase, DocumentKind, DocumentScope, Draft, EntryHead, EntryKind, EntryToken, InputSubmissionStatus, StorageError, SubmissionIdentity, SubmissionKind, SubmissionStatus, TaskDefinitionSpec, TaskKind, TaskStatus, WatchListener, WatchReason, WriteSubmissionStatus, append, as_table_change, definition, delete, identity, is_taken, move_items, partial_cmp, set, splice, take, truncate, typed, with_change

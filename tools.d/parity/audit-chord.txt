@@ -1,0 +1,34 @@
+# 审计简报：packages/chord → crates/pi-durable/src/chord
+
+范围：AGENT.md 声明子集
+
+
+## 文件配对表
+
+- `json.ts` → `json.rs`
+- `delta/index.ts` → `delta.rs`
+- `context/index.ts` → `context.rs`
+
+未配对（范围内 TS 文件在 Rust 侧无对应）：
+- `delta/apply-immutable-trusted.ts`
+- `delta/tracker.ts`
+- `services/state-codec.ts`
+- `services/state-internals.ts`
+- `services/state.ts`
+
+## 正向差异（TS 符号在 Rust 侧 local/moved/missing）
+
+**`json.ts`**
+  - missing: CopyJsonOptions(type)
+**`delta/index.ts`**
+  - missing: NonEmptyPath(type), PathRef(type), Seg(type), WireOp(type), isBase(const), isReplace(const)
+**`context/index.ts`**
+  - moved: value
+  - missing: createContextKey(fn), toString(method)
+
+## 反向候选（Rust pub 符号在范围内 TS 未见同名，含噪音）
+
+- `context`: Context, EmptyContext, await_with_context, describe, with_abort_signal, with_cancel, without_abort_signal
+- `delta`: DeltaError, PathSegment, apply, apply_immutable, apply_immutable_batches, apply_in_place
+- `state`: AttachedReplicatedState, DeliveryKind, MAX_PENDING_DELIVERIES, ReplicatedState, ReplicatedStateDelivery, ReplicatedStatePublisher, ReplicatedStateSource, ReplicatedStateSourceAttachment, ReplicatedStateSourceFrame, SourceListener, StateErrorReporter, StateListener, StateSubscriber, Subscription, attach_replicated_state_source, cursor, service_delivery_context, subscriber_count, unsubscribe
+- `tracker`: MAX_DELTA_OPERATIONS, append, base, delete, into_parts, into_value, is_empty, move_items, ops, record, set, splice, truncate

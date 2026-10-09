@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -64,6 +65,12 @@ pub enum ModelThinkingLevel {
 
 /// 对应 `ThinkingLevelMap = Partial<Record<ModelThinkingLevel, string | null>>`
 pub type ThinkingLevelMap = BTreeMap<ModelThinkingLevel, Option<String>>;
+
+/// 对应 `SamplingParams = Record<string, unknown>`。
+pub type SamplingParams = serde_json::Value;
+
+/// 对应 `SamplingParamsByThinkingLevel = Partial<Record<ModelThinkingLevel, SamplingParams>>`。
+pub type SamplingParamsByThinkingLevel = BTreeMap<ModelThinkingLevel, SamplingParams>;
 
 /// 对应 `ThinkingBudgets`（token-based providers only）
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -185,14 +192,15 @@ impl std::error::Error for AbortError {}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextContent {
-    #[serde(rename = "type")]
+    // `ContentBlock` 是 internally tagged：`type` 会被外层标签消费，因此这里必须可缺省。
+    #[serde(rename = "type", default)]
     pub kind: TextKind,
     pub text: String,
     pub text_signature: Option<String>,
 }
 
 /// 对应 `TextContent.type: "text"` 的字面量（序列化为字符串）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TextKind;
 
 impl Serialize for TextKind {
@@ -216,7 +224,8 @@ impl<'de> Deserialize<'de> for TextKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThinkingContent {
-    #[serde(rename = "type")]
+    // `ContentBlock` 是 internally tagged：`type` 会被外层标签消费，因此这里必须可缺省。
+    #[serde(rename = "type", default)]
     pub kind: ThinkingKind,
     pub thinking: String,
     pub thinking_signature: Option<String>,
@@ -224,7 +233,7 @@ pub struct ThinkingContent {
 }
 
 /// 对应 `ThinkingContent.type: "thinking"` 的字面量。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ThinkingKind;
 
 impl Serialize for ThinkingKind {
@@ -248,7 +257,8 @@ impl<'de> Deserialize<'de> for ThinkingKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageContent {
-    #[serde(rename = "type")]
+    // `ContentBlock` 是 internally tagged：`type` 会被外层标签消费，因此这里必须可缺省。
+    #[serde(rename = "type", default)]
     pub kind: ImageKind,
     /// base64 编码的图像数据。
     pub data: String,
@@ -257,7 +267,7 @@ pub struct ImageContent {
 }
 
 /// 对应 `ImageContent.type: "image"` 的字面量。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ImageKind;
 
 impl Serialize for ImageKind {
@@ -281,7 +291,8 @@ impl<'de> Deserialize<'de> for ImageKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCall {
-    #[serde(rename = "type")]
+    // `ContentBlock` 是 internally tagged：`type` 会被外层标签消费，因此这里必须可缺省。
+    #[serde(rename = "type", default)]
     pub kind: ToolCallKind,
     pub id: String,
     pub name: String,
@@ -291,7 +302,7 @@ pub struct ToolCall {
 }
 
 /// 对应 `ToolCall.type: "toolCall"` 的字面量。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ToolCallKind;
 
 impl Serialize for ToolCallKind {
@@ -470,6 +481,10 @@ pub struct AssistantMessage {
     pub raw_stop_reason: Option<String>,
     pub end_turn: Option<bool>,
     pub timestamp: u64,
+    /// 对应 `durationMs`：从 `timestamp` 到响应结束的毫秒数（单调钟测）。
+    /// 由 `AssistantMessageEventStream` 在它看到开始的最终消息上设置；旧消息与后取回的 deferred 结果缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 /// 对应 `ToolResultMessage`
@@ -484,6 +499,9 @@ pub struct ToolResultMessage {
     pub added_tool_names: Option<Vec<String>>,
     pub is_error: bool,
     pub timestamp: u64,
+    /// 工具执行耗时（毫秒）；旧结果缺省。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
 }
 
 /// 对应 `Message = SystemMessage | UserMessage | AssistantMessage | ToolResultMessage`
@@ -667,6 +685,41 @@ pub enum InputModality {
     Image,
 }
 
+/// 对应 `ModelPromptCache = Partial<Record<Exclude<CacheRetention, "none">, number>>`。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelPromptCache {
+    pub short: Option<u64>,
+    pub long: Option<u64>,
+}
+
+/// 对应 `ModelImageResizeOptions`。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelImageResizeOptions {
+    pub max_width: Option<u64>,
+    pub max_height: Option<u64>,
+    pub max_bytes: Option<u64>,
+    pub jpeg_quality: Option<u64>,
+}
+
+/// 对应 `ModelImageInputLimits`。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelImageInputLimits {
+    pub resize: Option<ModelImageResizeOptions>,
+    pub max_per_message: Option<u64>,
+    pub max_per_request: Option<u64>,
+}
+
+/// 对应 `ModelInputLimits`。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInputLimits {
+    pub max_request_bytes: Option<u64>,
+    pub images: Option<ModelImageInputLimits>,
+}
+
 /// 对应 `Model<TApi extends Api>`。
 /// TS 中 `compat` 为按 api 区分的条件类型；Rust 中简化为 JSON 值，按需解析。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -684,12 +737,124 @@ pub struct Model {
     pub context_window: u64,
     pub max_tokens: u64,
     pub sampling_params: Option<serde_json::Value>,
+    /// 对应 `samplingParamsByThinkingLevel`：按有效 pi thinking level 选择的采样参数覆盖。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling_params_by_thinking_level: Option<SamplingParamsByThinkingLevel>,
     pub headers: Option<BTreeMap<String, String>>,
     pub compat: Option<serde_json::Value>,
+    /// 对应 `promptCache`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache: Option<ModelPromptCache>,
+    /// 对应 `inputLimits`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_limits: Option<ModelInputLimits>,
 }
 
-/// 对应 `ProviderRequestOptions` 的核心字段（去掉 fetch/onPayload/onResponse 等回调，
-/// 这些在 provider 适配层处理；`telemetryContext` 的传递方案待 telemetry 层统一设计）。
+/// 对应 `ProviderResponse = { status: number; headers: Record<string, string> }`。
+#[derive(Debug, Clone, Default)]
+pub struct ProviderResponse {
+    pub status: u16,
+    pub headers: BTreeMap<String, String>,
+}
+
+/// 对应 `onPayload`：请求体发出前调用；返回 `Some(value)` 替换 payload，`None` 保持原样。
+#[allow(clippy::type_complexity)]
+pub struct OnPayloadFn(
+    pub  Arc<
+        dyn Fn(
+                &serde_json::Value,
+                &Model,
+            ) -> Pin<Box<dyn Future<Output = Option<serde_json::Value>> + Send>>
+            + Send
+            + Sync,
+    >,
+);
+
+impl Clone for OnPayloadFn {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl std::fmt::Debug for OnPayloadFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OnPayloadFn")
+    }
+}
+
+impl std::ops::Deref for OnPayloadFn {
+    type Target = dyn Fn(
+            &serde_json::Value,
+            &Model,
+        ) -> Pin<Box<dyn Future<Output = Option<serde_json::Value>> + Send>>
+        + Send
+        + Sync;
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+/// 对应 `onResponse`：HTTP 响应后调用。
+#[allow(clippy::type_complexity)]
+pub struct OnResponseFn(
+    pub  Arc<
+        dyn Fn(&ProviderResponse, &Model) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync,
+    >,
+);
+
+impl Clone for OnResponseFn {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl std::fmt::Debug for OnResponseFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OnResponseFn")
+    }
+}
+
+impl std::ops::Deref for OnResponseFn {
+    type Target =
+        dyn Fn(&ProviderResponse, &Model) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync;
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+/// 对应 `onProviderStreamEvent`：每个 provider 流事件解析后调用。
+#[allow(clippy::type_complexity)]
+pub struct OnProviderStreamEventFn(
+    pub  Arc<
+        dyn Fn(&serde_json::Value, &Model) -> Pin<Box<dyn Future<Output = ()> + Send>>
+            + Send
+            + Sync,
+    >,
+);
+
+impl Clone for OnProviderStreamEventFn {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl std::fmt::Debug for OnProviderStreamEventFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OnProviderStreamEventFn")
+    }
+}
+
+impl std::ops::Deref for OnProviderStreamEventFn {
+    type Target = dyn Fn(&serde_json::Value, &Model) -> Pin<Box<dyn Future<Output = ()> + Send>>
+        + Send
+        + Sync;
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+/// 对应 `ProviderRequestOptions` 的核心字段（去掉 fetch 回调与 telemetryContext；
+/// `onPayload`/`onResponse` 保留并在 provider 适配层调用）。
 #[derive(Debug, Clone, Default)]
 pub struct ProviderRequestOptions {
     pub signal: Option<AbortSignal>,
@@ -698,6 +863,8 @@ pub struct ProviderRequestOptions {
     pub timeout_ms: Option<u64>,
     pub max_retries: Option<u64>,
     pub max_retry_delay_ms: Option<u64>,
+    pub on_payload: Option<OnPayloadFn>,
+    pub on_response: Option<OnResponseFn>,
 }
 
 /// 对应 `StreamOptions`
@@ -712,6 +879,7 @@ pub struct StreamOptions {
     pub session_id: Option<String>,
     pub websocket_connect_timeout_ms: Option<u64>,
     pub metadata: Option<serde_json::Value>,
+    pub on_provider_stream_event: Option<OnProviderStreamEventFn>,
 }
 
 /// 对应 `SimpleStreamOptions`
@@ -734,3 +902,72 @@ pub type StreamFunction = Arc<
         + Send
         + Sync,
 >;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `ContentBlock` 是 internally tagged：`type` 由外层标签提供，内层结构的同名字段必须可缺省，
+    /// 否则序列化后的 JSON 无法读回（内层的 `type` 已被标签消费）。
+    #[test]
+    fn content_block_round_trips_through_json() {
+        let blocks = vec![
+            ContentBlock::Text(TextContent {
+                kind: TextKind,
+                text: "hi".to_string(),
+                text_signature: None,
+            }),
+            ContentBlock::Thinking(ThinkingContent {
+                kind: ThinkingKind,
+                thinking: "why".to_string(),
+                thinking_signature: None,
+                redacted: None,
+            }),
+            ContentBlock::Image(ImageContent {
+                kind: ImageKind,
+                data: "AAAA".to_string(),
+                mime_type: "image/png".to_string(),
+            }),
+            ContentBlock::ToolCall(ToolCall {
+                kind: ToolCallKind,
+                id: "call-1".to_string(),
+                name: "read".to_string(),
+                arguments: serde_json::json!({"path": "a"}),
+                thought_signature: None,
+                namespace: None,
+            }),
+        ];
+        for block in blocks {
+            let json = serde_json::to_value(&block).expect("serialise");
+            assert_eq!(
+                json.get("type").and_then(|value| value.as_str()),
+                Some(match &block {
+                    ContentBlock::Text(_) => "text",
+                    ContentBlock::Thinking(_) => "thinking",
+                    ContentBlock::Image(_) => "image",
+                    ContentBlock::ToolCall(_) => "toolCall",
+                }),
+                "标签写在内层"
+            );
+            let back: ContentBlock = serde_json::from_value(json).expect("deserialise");
+            assert_eq!(back, block, "往返必须一致");
+        }
+    }
+
+    /// 独立序列化的内层结构仍带 `type`（`TextOrImageContent` 是 untagged，不会消费它）。
+    #[test]
+    fn text_or_image_content_keeps_its_type_field() {
+        let content = TextOrImageContent::Text(TextContent {
+            kind: TextKind,
+            text: "hi".to_string(),
+            text_signature: None,
+        });
+        let json = serde_json::to_value(&content).expect("serialise");
+        assert_eq!(
+            json.get("type").and_then(|value| value.as_str()),
+            Some("text")
+        );
+        let back: TextOrImageContent = serde_json::from_value(json).expect("deserialise");
+        assert_eq!(back, content);
+    }
+}

@@ -1,0 +1,31 @@
+# 审计简报：packages/agent → crates/pi-agent-core/src
+
+范围：完整复刻
+
+
+## 文件配对表
+
+- `agent-loop.ts` → `agent-loop.rs`
+- `agent.ts` → `agent.rs`
+- `index.ts` → `lib.rs`
+- `proxy.ts` → `proxy.rs`
+- `stream-fn.ts` → `stream-fn.rs`
+- `types.ts` → `types.rs`
+
+## 正向差异（TS 符号在 Rust 侧 local/moved/missing）
+
+**`agent-loop.ts`**
+  - moved: ToolCallHooks
+**`agent.ts`**
+  - missing: AgentInitialState(type)
+**`types.ts`**
+  - moved: AgentToolCallOutcome
+  - missing: CustomAgentMessages(type), FinishTurn(type), PrepareRequest(type)
+
+## 反向候选（Rust pub 符号在范围内 TS 未见同名，含噪音）
+
+- `agent`: abort, clear_all_queues, clear_follow_up_queue, clear_steering_queue, continue_turn, create_context_snapshot, create_loop_config, default_convert_to_llm, finish_run, follow_up, handle_run_failure, has_queued_messages, peek_queued_messages, prompt_messages, prompt_text, reset, run_continuation, run_prompt_messages, run_with_lifecycle, set_messages, set_model, set_system_prompt, set_thinking_level, set_tools, signal, snapshot, state, steer, subscribe, wait_for_idle
+- `agent-loop`: FinalizedToolCallOutcome
+- `proxy`: proxy_stream_fn
+- `stream-fn`: get_default_stream_fn
+- `types`: AfterToolCallFn, AgentToolExecuteFn, BashExecutionMessage, BeforeToolCallFn, BranchSummaryMessage, CompactionSummaryMessage, ConvertToLlmFn, CustomMessage, CustomMessageContent, FinishTurnFn, GetApiKeyFn, GetMessagesFn, PrepareNextTurnFn, PrepareRequestFn, ReplayPolicy, ShouldStopAfterTurnContext, ToolUpdateSink, TransformContextFn, role, to_ai_thinking_level

@@ -21,10 +21,24 @@ UPSTREAM = os.path.join(ROOT, "upstream/packages")
 OUT = os.path.join(ROOT, "UPSTREAM-PARITY.md")
 
 TARGETS = [
-    ("agent", "crates/pi-agent/src"),
+    ("agent", "crates/pi-agent-core/src"),
     ("ai", "crates/pi-ai/src"),
     ("telemetry", "crates/pi-telemetry/src"),
+    ("durable", "crates/pi-durable/src"),
+    ("chord", "crates/pi-durable/src/chord"),
 ]
+
+# chord 是 durable 内的子集模块，无独立 AGENT.md；这里硬编码声明范围（P1）。
+CHORD_SCOPE = {
+    "delta/index.ts",
+    "delta/apply-immutable-trusted.ts",
+    "delta/tracker.ts",
+    "json.ts",
+    "context/index.ts",
+    "services/state.ts",
+    "services/state-internals.ts",
+    "services/state-codec.ts",
+}
 
 EXCLUDE_TS_SUFFIX = ("models.generated.ts", "image-models.generated.ts")
 EXCLUDE_PATH_PARTS = ("/pico3/",)
@@ -42,42 +56,67 @@ REVIEW_SECTION = """
 
 > 上方是机械扫描结果。本节的职责只有两件事：**(1) 说明哪些 MISSING 是假阳性，(2) 列出仍未对齐的项**。
 > 已对齐项的改动明细见 git 历史，此处不再保留。
+> 本轮已按 v1.1.0 新架构重跑扫描，并逐类人工复核过；P10 又做了一次双向
+> （TS→Rust 缺失 + Rust→TS 多余）逐文件逐方法审计并修复，结论见 `tools.d/parity/AUDIT-REPORT.md`。
 
 ## 一、机械扫描的已知假阳性（非遗漏）
 
 以下类别扫描器会报 MISSING，但 Rust 侧已有等价实现：
 
-- **宏生成**：`harness/result.ts` 的 13 个错误类由 `result.rs` 的 `tagged_error!` 宏生成。
-- **语言替换**：TS 的 `Result`/`ok`/`err` → Rust 标准库 `Result`；`utf8ByteLength` → `str::len()`。
-- **类型合并**：`session/types.ts` 的 16 个 `*Operation` 接口 → `OperationState` enum variants。
-- **类型级编程**：`pi-telemetry` 的 12 项（条件 / 映射类型 / `UnionToIntersection`）与
-  `harness/telemetry.ts` 的 16 个 span 类型（`TelemetrySchemaSpanName<typeof SCHEMA>` 推导）
-  —— Rust 无对应能力，运行时行为一致（`start_ai_span` / `start_harness_span` / 两个 `*_SCHEMA` 都在）。
-- **命名适配**：`restoreSession`→`restore_session_arc`、`captureLaneSnapshot`→`capture_lane_snapshot_inner`、
-  `setConfiguration`→`set_configuration_identity`、`requestOperationAbort`→`request_abort`、
-  `operationScopeOf`→`OperationState::scope()` 等。
-- **内联实现**：第 3 节的私有函数档多属此类（如 prompt-templates 的 3 个加载函数内联进
-  `load_prompt_templates`、skills 的 `loadSkillsFromDirInternal`→`load_skills_from_dir_inner`）。
-- **范围外**：`pi-ai` 107 项中的绝大多数（Classifier / Images / 各厂商 Compat / Routing）。
+- **重载拆分 / 命名适配**：agent 的 `prompt`（字符串/消息重载）→ `prompt_text` /
+  `prompt_text_with_images` / `prompt_messages`，`continue` → `continue_turn`；
+  `steeringMode` / `followUpMode` getter/setter → `set_steering_mode` / `steering_mode` /
+  `set_follow_up_mode` / `follow_up_mode` 访问器（P10 补全）；`restoreSession`→`restore_session_arc` 等。
+- **类型合并**：durable `types.ts` 的 `*DocToken` / `*DocDefinition` / `*DocFamilyToken` /
+  `*Semantics` 十几项 → `DocToken` / `DocDefinitionSpec` / `DocumentSemantics` 等合并类型；
+  `AnyTask` / `HooksOf` 是条件类型推导，Rust 无对应能力。
+- **语言机制豁免**：`env/index.ts` 的 `Result` / `ok` / `err` / `getOrThrow` / `getOrUndefined` /
+  `toError` → Rust 标准库 `Result`；chord `json.ts` 的 `isJsonValue` / `omitUndefinedProperties` →
+  Rust `serde_json::Value` 类型系统保证严格 JSON（无 `undefined`/cycle/symbol），序列化时用
+  `skip_serializing_if` 剔除；chord `context` 的 `createContextKey` / `withContextValue` → pi-durable 不用
+  （`context.rs` 已声明只实现 `abortSignal`）。
+  （chord `delta` 的 `WireOp` / `Encoder` / `Decoder` path-interning 已由 P10 补全，不再是 serde 替代。）
+- **类型级编程**：`pi-telemetry` 的 12 项与 `harness/types.ts` 的 span 推导类型；tools 的
+  `*ToolInput` 是 TypeBox schema 推导，Rust 用 JSON schema + 运行时校验。
+- **合并函数**：`storage/memory.ts` 的 `prepareCommit` / `applyPreparedCommit` / `checkGlobalIds` /
+  `checkDocumentActions` / `prepareDocumentActions` / `resolveDocumentCopies` / `applyDocumentActions`
+  → `validate_writes` + `apply_writes`；`storage/jsonl` 的 `JsonlCorruptionError` /
+  `JsonlStoragePoisonedError` → `StorageError` 变体。
+- **工厂模式**：`harness/compaction.ts` 的 `CompactionTask`、`generation.ts` 的 `GenerationTask`、
+  `tool.ts` 的 `ToolTask`、`registry.ts` 的 `BUILTIN_TASKS` 这些模块级 const → Rust 用
+  `make_*_task()` 工厂 + `create_registry()` 里的 `OnceLock` 组装（Rust 无模块级可变初始化）。
+- **内联实现**：第 3 节私有函数档多属此类（`isList`/`names`→`names_json`、`freezeJson`→Rust
+  owned 值、`createToolTask`→registry 组装、`fileInfoFromStats`/`fileKindFromStats`→
+  `file_info_from_metadata`、`decodedBytes`→`str::len()`、`readUint*`→`read_u*` 等）。
+- **文件合并**：chord 的 `delta/apply-immutable-trusted.ts` / `delta/index.ts` → `delta.rs`，
+  `delta/tracker.ts` → `tracker.rs`，`services/state*.ts` → `state.rs`（扫描配对规则未识别 1:N 合并）。
+- **范围外**：`pi-ai` 108 项中的绝大多数（155 个范围外文件：其他 provider / Classifier /
+  Images / 各厂商 Compat / Routing / OAuth 登录流程）；chord 的 `facets`/`node`/`services` 其余。
+- **durable 9 个「文件级缺失」是已知豁免**：`storage/sqlite/{cloudflare,database,node,migrations}.ts`
+  与 `storage/jsonl/node.ts` 是跨运行时异步 facade（不复刻 / 语言机制豁免）；
+  `storage/sqlite/storage.ts`（934 行）已合并进 `storage/sqlite.rs`（1:N）；
+  `testing/{assertions,runner}.ts` 是 JS 测试适配器；`testing/types.ts` 已合并进
+  `storage_conformance.rs` / `env_conformance.rs`。
 
-## 二、仍未对齐的项
+## 二、仍未对齐的项（P10 双向审计后）
 
 详情与工作量见 `todos.md`：
 
-- **B1** Node 平台细节（`findBashOnPath` / WSL 检测 / `killProcessTree`）—— `std::process` 已等价覆盖，不搬。
-- **B2 / C5** 一致性测试套件（conformance + benchmark + storage 装饰器，约 2,275 行）—— 测试基建。
-- **B3** legacy-v3 JSONL 迁移 —— **用户明确要求不复刻**。
-- **C2** `harness/telemetry.ts` 的 16 个 span 类型 —— 类型级推导，豁免。
+- **B1** Node 平台细节（`findBashOnPath` / WSL 检测 / `getShellConfig` 的 Windows 分支）——
+  macOS/Linux 下 `std::process` 已等价覆盖，Windows 分支不在本项目范围。
+- **C2** `pi-telemetry` 的类型级推导 12 项 —— 豁免。
 - **C3** session 4 个具名错误 —— 消息已逐字对齐、上游无 `instanceof` 分支，不建议投入。
-- **上游能力偏差**：`onProviderStreamEvent` / Z.AI CN overflow / HTTP-date `Retry-After`。
+- **storage-benchmark**（489 行）—— 性能基准，非正确性验证，待续（可选）。
+- **上游能力偏差**：Z.AI CN overflow / HTTP-date `Retry-After`。
+  （`onProviderStreamEvent` 已在 P10 补全，不再列为偏差。）
 
 ## 三、扫描口径与已知盲区
 
 - 符号匹配用「去分隔符 + 小写」的 compact 键，因此 `lazyOAuth` ↔ `lazy_oauth` 这类缩写差异不会误报。
 - `local`（同文件命中）视为 OK；`global`（同 crate 其他文件）记为「移位」；整 crate 无同名记 MISSING。
-- 第 3 节的私有函数档覆盖上游非导出 `function`，是导出符号扫描的补充 ——
-  历史上正是靠人工读到这一层才发现 edit 的 `prepareEditArguments` 缺口。
-- **已知盲区**：`tagged_error!` 等宏生成的类型扫不到（见第一节）；Rust 侧内联实现无法自动识别。
+- 第 3 节的私有函数档覆盖上游非导出 `function`，是导出符号扫描的补充。
+- **已知盲区**：`tagged_error!` 等宏生成的类型扫不到（见第一节）；Rust 侧内联实现无法自动识别；
+  1:N 文件合并（如 chord `delta/index.ts` + `apply-immutable-trusted.ts` → `delta.rs`）扫不到。
 """
 
 
@@ -269,7 +308,13 @@ def fuzzy_candidates(snake, rust_all, limit=4):
 
 
 def declared_scope(pkg):
-    """pi-ai/AGENT.md 声明的复刻范围（TS 相对路径集合）。返回 None 表示无声明。"""
+    """只有 pi-ai 与 chord 是「声明子集」，其余（agent/durable/telemetry）为完整复刻。
+    注意：durable 的 AGENT.md 虽然含 src/xxx.ts 路径，但那是 67 文件的逐项状态表，
+    不是子集声明 —— 若照读会把 52 个文件误判为范围外。"""
+    if pkg == "chord":
+        return CHORD_SCOPE
+    if pkg != "ai":
+        return None
     agent_md = os.path.join(ROOT, f"crates/pi-{pkg}/AGENT.md")
     if not os.path.exists(agent_md):
         return None
@@ -424,7 +469,7 @@ def main():
 
     header = [
         "# pi_rs ↔ upstream 方法级对比报告\n\n",
-        "> 基线：`upstream/` 检出于 `v0.99.2`（HEAD `005af57d8`）\n\n",
+        "> 基线：`upstream/` 检出于 `v1.1.0`（HEAD `abe508e1b`）\n\n",
         "> 方法：提取 TS 顶层导出（class/function/const/interface/type/enum）与 class 方法，\n",
         "> 按 camelCase→snake_case 在 Rust 侧同名查找。`local` 命中视为 OK；\n",
         "> `global`（同 crate 其他文件）记为「移位」；整 crate 无同名记 MISSING。\n",
@@ -432,11 +477,13 @@ def main():
         "> trait 默认实现会产生误报，需人工确认。**文末附人工逐项复核结论（豁免/适配/缺口三档）**。\n\n",
         "## 总览\n\n",
         "上游包 → Rust crate 映射（用于确认范围）：\n\n",
-        "- `packages/agent` → `crates/pi-agent`（**完整复刻目标**）\n",
+        "- `packages/agent` → `crates/pi-agent-core`（**完整复刻目标**）\n",
         "- `packages/ai` → `crates/pi-ai`（**声明子集**，范围见 `crates/pi-ai/AGENT.md`）\n",
         "- `packages/telemetry` → `crates/pi-telemetry`\n",
-        "- 未复刻：`chord`、`client`、`codemode`、`coding-agent`、`durable`、`evals`、\n",
-        "  `mcp`、`protocol`、`server`、`session-backends`、`tui`（以及 agent 包内的 `pico3`、`polymarket`）\n\n",
+        "- `packages/durable` → `crates/pi-durable`（**完整复刻目标**）\n",
+        "- `packages/chord` → `crates/pi-durable/src/chord`（**子集**，范围见 `scan.py` 的 `CHORD_SCOPE`）\n",
+        "- 未复刻：`client`、`codemode`、`coding-agent`、`env`、`evals`、\n",
+        "  `mcp`、`protocol`、`server`、`tui`（产品层）\n\n",
         "扫描统计：\n\n",
     ]
     for pkg, rs_rel in TARGETS:

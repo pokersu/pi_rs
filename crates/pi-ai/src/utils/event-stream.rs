@@ -93,6 +93,11 @@ where
         let rx = self.inner.final_rx.clone();
         async move { rx.await.expect("event stream ended without a final result") }
     }
+
+    /// 流是否已结束（`done` / `end` 之后）。
+    pub fn is_done(&self) -> bool {
+        self.inner.done.load(Ordering::Relaxed)
+    }
 }
 
 impl<T, R> Stream for EventStream<T, R>
@@ -109,12 +114,84 @@ where
     }
 }
 
-/// 对应 TS 的 `AssistantMessageEventStream`。
-pub type AssistantMessageEventStream = EventStream<AssistantMessageEvent, AssistantMessage>;
+/// 对应 TS 的 `AssistantMessageEventStream`：一个响应的最终消息带 `durationMs`（单调钟测）。
+///
+/// 从流的创建开始计时；除非消息已有 `durationMs` 或其 `timestamp` 早于流开始（转发别处已开始的响应）。
+pub struct AssistantMessageEventStream {
+    stream: EventStream<AssistantMessageEvent, AssistantMessage>,
+    started_at: u64,
+    started_at_monotonic: std::time::Instant,
+}
+
+impl Clone for AssistantMessageEventStream {
+    fn clone(&self) -> Self {
+        Self {
+            stream: self.stream.clone(),
+            started_at: self.started_at,
+            started_at_monotonic: self.started_at_monotonic,
+        }
+    }
+}
+
+impl AssistantMessageEventStream {
+    fn time(&self, message: &mut AssistantMessage) {
+        if self.stream.is_done()
+            || message.duration_ms.is_some()
+            || message.timestamp < self.started_at
+        {
+            return;
+        }
+        let elapsed = self.started_at_monotonic.elapsed().as_millis() as u64;
+        message.duration_ms = Some(elapsed);
+    }
+
+    /// 对应 `push(event)`：计时最终消息后投递。
+    pub fn push(&self, event: AssistantMessageEvent) {
+        let event = match event {
+            AssistantMessageEvent::Done { reason, message } => {
+                let mut message = message;
+                self.time(&mut message);
+                AssistantMessageEvent::Done { reason, message }
+            }
+            AssistantMessageEvent::Error { reason, error } => {
+                let mut error = error;
+                self.time(&mut error);
+                AssistantMessageEvent::Error { reason, error }
+            }
+            other => other,
+        };
+        self.stream.push(event);
+    }
+
+    /// 对应 `end(result?)`：计时结果后结束。
+    pub fn end(&self, result: Option<AssistantMessage>) {
+        let result = result.map(|mut message| {
+            self.time(&mut message);
+            message
+        });
+        self.stream.end(result);
+    }
+
+    /// 对应 `result()`。
+    pub fn result(&self) -> impl Future<Output = AssistantMessage> + '_ {
+        self.stream.result()
+    }
+}
+
+impl Stream for AssistantMessageEventStream {
+    type Item = AssistantMessageEvent;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<Option<AssistantMessageEvent>> {
+        Pin::new(&mut self.get_mut().stream).poll_next(cx)
+    }
+}
 
 /// 对应 TS 的 `createAssistantMessageEventStream()` 工厂。
 pub fn create_assistant_message_event_stream() -> AssistantMessageEventStream {
-    EventStream::new(
+    let stream = EventStream::new(
         |event| {
             matches!(
                 event,
@@ -126,5 +203,61 @@ pub fn create_assistant_message_event_stream() -> AssistantMessageEventStream {
             AssistantMessageEvent::Error { error, .. } => error.clone(),
             _ => panic!("Unexpected event type for final result"),
         },
-    )
+    );
+    AssistantMessageEventStream {
+        stream,
+        started_at: crate::utils::uuid::now_ms() as u64,
+        started_at_monotonic: std::time::Instant::now(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{StopReason, TerminalStopReason};
+
+    fn message(timestamp: u64) -> AssistantMessage {
+        AssistantMessage {
+            content: Vec::new(),
+            api: "openai-responses".into(),
+            provider: "openai".into(),
+            model: "gpt-4o".into(),
+            response_model: None,
+            response_id: None,
+            provider_thinking_level: None,
+            thinking_level: None,
+            usage: crate::default_usage(),
+            stop_reason: StopReason::Stop,
+            deferred: None,
+            error_message: None,
+            raw_stop_reason: None,
+            end_turn: None,
+            timestamp,
+            duration_ms: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn times_the_final_done_message() {
+        let stream = create_assistant_message_event_stream();
+        let now = crate::utils::uuid::now_ms() as u64;
+        stream.push(AssistantMessageEvent::Done {
+            reason: TerminalStopReason::Stop,
+            message: message(now),
+        });
+        let result = stream.result().await;
+        assert!(result.duration_ms.is_some(), "最终消息应带 durationMs");
+    }
+
+    #[tokio::test]
+    async fn does_not_time_a_forwarded_response() {
+        let stream = create_assistant_message_event_stream();
+        // 早于流开始的 timestamp 表示响应在别处已开始，不计时。
+        stream.push(AssistantMessageEvent::Done {
+            reason: TerminalStopReason::Stop,
+            message: message(0),
+        });
+        let result = stream.result().await;
+        assert_eq!(result.duration_ms, None);
+    }
 }

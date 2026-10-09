@@ -3,10 +3,14 @@
 //! 工具参数的严格 JSON Schema 与 grammar 约束采样。
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde_json::Value;
 
 use crate::types::{ConstrainedSamplingConfig, StrictMode, Tool};
+
+/// 对应 `UnsupportedStrictSchemaKeywordCheck`：返回 true 表示 provider 的 strict 模式拒绝该关键字。
+pub type UnsupportedStrictSchemaKeywordCheck = Arc<dyn Fn(&str, &Value) -> bool + Send + Sync>;
 
 const UNSUPPORTED_STRICT_SCHEMA_KEYS: &[&str] = &[
     "$ref",
@@ -74,13 +78,25 @@ fn schema_allows_null(schema: &Value) -> bool {
         .unwrap_or(false)
 }
 
-fn make_json_schema_node_strict(schema: &mut Value) -> Result<(), String> {
+fn make_json_schema_node_strict(
+    schema: &mut Value,
+    is_unsupported_keyword: Option<&UnsupportedStrictSchemaKeywordCheck>,
+) -> Result<(), String> {
     if !is_json_schema_object(schema) {
         return Err("boolean schemas are unsupported".to_string());
     }
     for key in UNSUPPORTED_STRICT_SCHEMA_KEYS {
         if schema.get(*key).is_some() {
             return Err(format!("{key} schemas are unsupported"));
+        }
+    }
+
+    // 对应上游：provider 可额外声明拒绝的关键字。
+    if let Some(check) = is_unsupported_keyword {
+        for (key, value) in schema.as_object().map(|o| o.iter()).into_iter().flatten() {
+            if check(key, value) {
+                return Err(format!("{key}: {value} is unsupported"));
+            }
         }
     }
 
@@ -96,7 +112,7 @@ fn make_json_schema_node_strict(schema: &mut Value) -> Result<(), String> {
                 return Err("object and array unions are unsupported".to_string());
             }
             let mut variant = variant;
-            make_json_schema_node_strict(&mut variant)?;
+            make_json_schema_node_strict(&mut variant, is_unsupported_keyword)?;
         }
     }
 
@@ -105,7 +121,7 @@ fn make_json_schema_node_strict(schema: &mut Value) -> Result<(), String> {
             return Err("tuple schemas are unsupported".to_string());
         }
         let mut items = items.clone();
-        make_json_schema_node_strict(&mut items)?;
+        make_json_schema_node_strict(&mut items, is_unsupported_keyword)?;
     }
 
     let is_object_schema = schema.get("type").and_then(|t| t.as_str()) == Some("object");
@@ -151,7 +167,7 @@ fn make_json_schema_node_strict(schema: &mut Value) -> Result<(), String> {
     let mut new_properties = serde_json::Map::new();
     for (key, property) in &properties {
         let mut property = property.clone();
-        make_json_schema_node_strict(&mut property)?;
+        make_json_schema_node_strict(&mut property, is_unsupported_keyword)?;
         if !required.contains(key) && !schema_allows_null(&property) {
             property = serde_json::json!({ "anyOf": [property, { "type": "null" }] });
         }
@@ -169,12 +185,15 @@ fn make_json_schema_node_strict(schema: &mut Value) -> Result<(), String> {
 }
 
 /// 对应 `makeStrictJsonSchema`。
-pub fn make_strict_json_schema(schema: &Value) -> Result<Value, String> {
+pub fn make_strict_json_schema(
+    schema: &Value,
+    is_unsupported_keyword: Option<&UnsupportedStrictSchemaKeywordCheck>,
+) -> Result<Value, String> {
     let mut cloned = schema.clone();
     if !is_json_schema_object(&cloned) {
         return Err("root schema must have type object".to_string());
     }
-    make_json_schema_node_strict(&mut cloned)?;
+    make_json_schema_node_strict(&mut cloned, is_unsupported_keyword)?;
     if cloned.get("type").and_then(|t| t.as_str()) != Some("object") {
         return Err("root schema must have type object".to_string());
     }
@@ -184,7 +203,7 @@ pub fn make_strict_json_schema(schema: &Value) -> Result<Value, String> {
 /// 对应 `getJsonSchemaToolParameters`。
 pub fn get_json_schema_tool_parameters(tool: &Tool, strict: Option<bool>) -> Value {
     if strict == Some(true) {
-        make_strict_json_schema(&tool.parameters).unwrap_or_else(|_| tool.parameters.clone())
+        make_strict_json_schema(&tool.parameters, None).unwrap_or_else(|_| tool.parameters.clone())
     } else {
         tool.parameters.clone()
     }
@@ -304,6 +323,7 @@ fn infer_grammar_input_property(tool: &Tool) -> Result<String, String> {
 pub fn resolve_json_schema_strict_sampling(
     tool: &Tool,
     supports_strict_mode: bool,
+    is_unsupported_keyword: Option<&UnsupportedStrictSchemaKeywordCheck>,
 ) -> Result<Option<bool>, String> {
     let Some(config) = &tool.constrained_sampling else {
         return Ok(None);
@@ -314,7 +334,7 @@ pub fn resolve_json_schema_strict_sampling(
     };
 
     if supports_strict_mode {
-        match make_strict_json_schema(&tool.parameters) {
+        match make_strict_json_schema(&tool.parameters, is_unsupported_keyword) {
             Ok(_) => return Ok(Some(true)),
             Err(error) => {
                 if strict != StrictMode::Require {

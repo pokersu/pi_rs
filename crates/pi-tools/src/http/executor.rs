@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use pi_agent::{AgentTool, AgentToolResult};
+use pi_agent_core::{AgentTool, AgentToolResult};
 use pi_ai::{TextContent, TextKind, TextOrImageContent};
 
 use crate::http::config::{AuthConfig, HttpToolConfig};

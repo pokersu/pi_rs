@@ -2,11 +2,9 @@
 //!
 //! 构建 provider 基础流式选项（max-tokens 收缩 + thinking 预算）。
 
-use serde_json::Value;
-
 use crate::types::{
-    Context, Model, ProviderRequestOptions, SimpleStreamOptions, StreamOptions, ThinkingBudgets,
-    ThinkingLevel,
+    Context, Model, ModelThinkingLevel, ProviderRequestOptions, SamplingParams,
+    SimpleStreamOptions, StreamOptions, ThinkingBudgets, ThinkingLevel,
 };
 
 const CONTEXT_SAFETY_TOKENS: u64 = 4096;
@@ -28,21 +26,52 @@ pub fn clamp_max_tokens_to_context(model: &Model, context: &Context, max_tokens:
     max_tokens.min(MIN_MAX_TOKENS.max(available))
 }
 
-fn merge_sampling_params(model: Option<&Value>, options: Option<&Value>) -> Option<Value> {
-    match (model, options) {
-        (None, None) => None,
-        (Some(m), None) => Some(m.clone()),
-        (None, Some(o)) => Some(o.clone()),
-        (Some(m), Some(o)) => {
-            let mut merged = m.clone();
-            if let (Some(mobj), Some(oobj)) = (merged.as_object_mut(), o.as_object()) {
-                for (key, value) in oobj {
-                    mobj.insert(key.clone(), value.clone());
-                }
-            }
-            Some(merged)
+fn model_thinking_level(reasoning: Option<ThinkingLevel>) -> ModelThinkingLevel {
+    match reasoning {
+        None => ModelThinkingLevel::Off,
+        Some(level) => match level {
+            ThinkingLevel::Minimal => ModelThinkingLevel::Minimal,
+            ThinkingLevel::Low => ModelThinkingLevel::Low,
+            ThinkingLevel::Medium => ModelThinkingLevel::Medium,
+            ThinkingLevel::High => ModelThinkingLevel::High,
+            ThinkingLevel::Xhigh => ModelThinkingLevel::Xhigh,
+            ThinkingLevel::Max => ModelThinkingLevel::Max,
+        },
+    }
+}
+
+/// 对应 `resolveSamplingParams(model, thinkingLevel, requestParams?)`：
+/// 按有效 thinking level 合并模型默认、分层覆盖与请求参数。
+pub fn resolve_sampling_params(
+    model: &Model,
+    thinking_level: ModelThinkingLevel,
+    request_params: Option<&SamplingParams>,
+) -> Option<SamplingParams> {
+    let effective = crate::models::clamp_thinking_level(model, thinking_level);
+    let thinking_level_params = model
+        .sampling_params_by_thinking_level
+        .as_ref()
+        .and_then(|map| map.get(&effective));
+    let has_any = model.sampling_params.is_some()
+        || thinking_level_params.is_some()
+        || request_params.is_some();
+    if !has_any {
+        return None;
+    }
+    let mut merged = serde_json::Map::new();
+    for params in [
+        model.sampling_params.as_ref(),
+        thinking_level_params,
+        request_params,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(object) = params.as_object() {
+            merged.extend(object.clone());
         }
     }
+    Some(serde_json::Value::Object(merged))
 }
 
 /// 对应 `buildBaseOptions(model, context, options?, apiKey?)`
@@ -52,8 +81,9 @@ pub fn build_base_options(
     options: Option<&SimpleStreamOptions>,
     api_key: Option<&str>,
 ) -> StreamOptions {
-    let sampling_params = merge_sampling_params(
-        model.sampling_params.as_ref(),
+    let sampling_params = resolve_sampling_params(
+        model,
+        model_thinking_level(options.and_then(|o| o.reasoning)),
         options.and_then(|o| o.stream.sampling_params.as_ref()),
     );
 
@@ -67,6 +97,8 @@ pub fn build_base_options(
             timeout_ms: options.and_then(|o| o.stream.request.timeout_ms),
             max_retries: options.and_then(|o| o.stream.request.max_retries),
             max_retry_delay_ms: options.and_then(|o| o.stream.request.max_retry_delay_ms),
+            on_payload: options.and_then(|o| o.stream.request.on_payload.clone()),
+            on_response: options.and_then(|o| o.stream.request.on_response.clone()),
         },
         temperature: options.and_then(|o| o.stream.temperature),
         sampling_params,
@@ -82,6 +114,7 @@ pub fn build_base_options(
         session_id: options.and_then(|o| o.stream.session_id.clone()),
         websocket_connect_timeout_ms: options.and_then(|o| o.stream.websocket_connect_timeout_ms),
         metadata: options.and_then(|o| o.stream.metadata.clone()),
+        on_provider_stream_event: options.and_then(|o| o.stream.on_provider_stream_event.clone()),
     }
 }
 

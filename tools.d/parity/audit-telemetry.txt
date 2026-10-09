@@ -1,0 +1,23 @@
+# 审计简报：packages/telemetry → crates/pi-telemetry/src
+
+范围：完整复刻
+
+
+## 文件配对表
+
+- `index.ts` → `lib.rs`
+- `memory.ts` → `memory.rs`
+- `noop.ts` → `noop.rs`
+- `testing/conformance.ts` → `testing/conformance.rs`
+- `testing/index.ts` → `testing/mod.rs`
+- `testing/types.ts` → `testing/types.rs`
+
+## 正向差异（TS 符号在 Rust 侧 local/moved/missing）
+
+
+## 反向候选（Rust pub 符号在范围内 TS 未见同名，含噪音）
+
+- `lib`: Cardinality, ErasedSpanCallback, ErasedSpanFuture, ErasedTelemetryContext, SpanDefaultStatus, SpanError, TelemetryAttributeKind, TelemetrySpanStatus, TypedSpanStarter, create_typed_span_starter, start_span, start_span_erased
+- `memory`: add_event, get_spans, set_attributes, set_status, start_child_span, start_span
+- `noop`: NoopTelemetrySpan, add_event, set_attributes, set_status, start_child_span, start_span
+- `testing/types`: get_spans, run

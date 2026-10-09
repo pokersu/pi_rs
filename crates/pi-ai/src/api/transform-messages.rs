@@ -173,6 +173,7 @@ fn insert_synthetic_tool_results(
                     added_tool_names: None,
                     is_error: true,
                     timestamp: now_ms(),
+                    duration_ms: None,
                 }));
             }
         }

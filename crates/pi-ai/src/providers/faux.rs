@@ -78,6 +78,7 @@ pub fn faux_assistant_message(
         raw_stop_reason: None,
         end_turn: None,
         timestamp: crate::utils::uuid::now_ms() as u64,
+        duration_ms: None,
     }
 }
 
@@ -298,8 +299,11 @@ pub fn faux_provider(models: Vec<Model>) -> FauxProviderHandle {
             context_window: 128_000,
             max_tokens: 4096,
             sampling_params: None,
+            sampling_params_by_thinking_level: None,
             headers: None,
             compat: None,
+            prompt_cache: None,
+            input_limits: None,
         }]
     } else {
         models

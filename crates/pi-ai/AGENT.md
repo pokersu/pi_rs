@@ -48,6 +48,7 @@
 | `src/auth/oauth/device-code.ts` | `src/auth/oauth/device-code.rs` | pollOAuthDeviceCodeFlow |
 | `src/auth/oauth/oauth-page.ts` | `src/auth/oauth/oauth-page.rs` | oauthSuccessHtml / oauthErrorHtml |
 | （`lazyStream` 相关） | `src/utils/error-stream.rs` | 错误流构造 |
+| `src/utils/assistant-message-frame.ts` | `src/utils/assistant-message-frame.rs` | assistant 流帧拼接/编码 |
 
 ## 功能介绍
 

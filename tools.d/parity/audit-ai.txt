@@ -1,0 +1,101 @@
+# 审计简报：packages/ai → crates/pi-ai/src
+
+范围：AGENT.md 声明子集
+
+
+## 文件配对表
+
+- `models.ts` → `models.rs`
+- `types.ts` → `types.rs`
+- `auth/context.ts` → `auth/context.rs`
+- `auth/credential-store.ts` → `auth/credential-store.rs`
+- `auth/helpers.ts` → `auth/helpers.rs`
+- `auth/resolve.ts` → `auth/resolve.rs`
+- `auth/types.ts` → `auth/types.rs`
+- `auth/oauth/device-code.ts` → `auth/oauth/device-code.rs`
+- `auth/oauth/pkce.ts` → `auth/oauth/pkce.rs`
+- `providers/deepseek.ts` → `providers/deepseek.rs`
+- `providers/faux.ts` → `providers/faux.rs`
+- `providers/openai.ts` → `providers/openai.rs`
+- `utils/abort.ts` → `utils/abort.rs`
+- `utils/diagnostics.ts` → `utils/diagnostics.rs`
+- `utils/error-body.ts` → `utils/error-body.rs`
+- `utils/estimate.ts` → `utils/estimate.rs`
+- `utils/event-stream.ts` → `utils/event-stream.rs`
+- `utils/hash.ts` → `utils/hash.rs`
+- `utils/headers.ts` → `utils/headers.rs`
+- `utils/json-parse.ts` → `utils/json-parse.rs`
+- `utils/overflow.ts` → `utils/overflow.rs`
+- `utils/pi-user-agent.ts` → `utils/pi-user-agent.rs`
+- `utils/provider-env.ts` → `utils/provider-env.rs`
+- `utils/provider-retry.ts` → `utils/provider-retry.rs`
+- `utils/retry.ts` → `utils/retry.rs`
+- `utils/sanitize-unicode.ts` → `utils/sanitize-unicode.rs`
+- `utils/sleep.ts` → `utils/sleep.rs`
+- `utils/text.ts` → `utils/text.rs`
+- `utils/typebox-helpers.ts` → `utils/typebox-helpers.rs`
+- `utils/uuid.ts` → `utils/uuid.rs`
+- `utils/validation.ts` → `utils/validation.rs`
+- `api/constrained-sampling.ts` → `api/constrained-sampling.rs`
+- `api/openai-completions.ts` → `api/openai-completions.rs`
+- `api/openai-responses.ts` → `api/openai-responses.rs`
+- `api/simple-options.ts` → `api/simple-options.rs`
+- `api/transform-messages.ts` → `api/transform-messages.rs`
+
+## 正向差异（TS 符号在 Rust 侧 local/moved/missing）
+
+**`models.ts`**
+  - moved: refresh
+  - missing: CreateModelsOptions(type), ModelsApiStreamOptions(type), ModelsClassifierOptions(type), ModelsDeferredCancelOptions(type), ModelsDeferredFetchOptions(type), ModelsImagesOptions(type), ModelsPublication(type), ModelsRefreshOptions(type), ModelsRefreshResult(type), ModelsRequestTransforms(type), ModelsSimpleStreamOptions(type), MutableModels(type), RefreshModelsContext(type), applyAuth(method), beginProviderRefresh(method), classify(method), complete(method), generateImages(method), getAllAvailable(method), getAllModels(method), getAuthenticatedProviders(method), getAvailableOfType(method), getModelOfType(method), getModelsOfType(method), publishProviderModels(method), requireChatProvider(method), requireProvider(method), resolveRefreshCredential(method), runProviderRefreshPhase(method), stream(method), supersedeProviderRefresh(method)
+**`types.ts`**
+  - missing: AnthropicAllowedFallbackModel(type), AnthropicMessagesCompat(type), AnyModel(type), ApiOptionsMap(type), ApiStreamOptions(type), AssistantImages(type), BaseModel(type), BedrockCompat(type), ChatTemplateKwargValue(type), ClassifierAnswer(type), ClassifierApi(type), ClassifierBoolAnswer(type), ClassifierBoolQuestion(type), ClassifierChoiceAnswer(type), ClassifierChoiceQuestion(type), ClassifierContext(type), ClassifierFunction(type), ClassifierModel(type), ClassifierOptions(type), ClassifierQuestion(type), ClassifierResult(type), ClassifierScoreAnswer(type), ClassifierScoreQuestion(type), ClassifierStopReason(type), FetchFunction(type), GrammarFormat(type), GrammarVariants(type), ImageApi(type), ImageModel(type), ImagesContext(type), ImagesFunction(type), ImagesInputContent(type), ImagesOptions(type), ImagesOutputContent(type), ImagesStopReason(type), JsonObject(type), JsonRepresentation(type), JsonValue(type), KnownApi(type), KnownClassifierApi(type), KnownImageApi(type), KnownProvider(type), MistralConversationsCompat(type), ModelImageInputLimits(type), ModelImageResizeOptions(type), ModelInputLimits(type), ModelPromptCache(type), ModelType(type), ModelTypeMap(type), NestedToolCallRecord(type), NestedToolCalls(type), OpenAICompletionsCompat(type), OpenAIResponsesCompat(type), OpenRouterRouting(type), ProviderClassifier(type), ProviderImages(type), ProviderImagesOptions(type), ProviderResponse(type), ProviderStreamOptions(type), ProviderStreams(type), SessionAffinityFormat(type), TextSignatureV1(type), ThinkingTokenBudgetField(type), VercelGatewayRouting(type)
+**`auth/resolve.ts`**
+  - missing: refreshStoredOAuthCredential(fn)
+**`auth/types.ts`**
+  - missing: LoginOptions(type)
+**`utils/event-stream.ts`**
+  - moved: enqueue
+  - missing: dequeue(method), length(method)
+**`api/constrained-sampling.ts`**
+  - missing: UnsupportedStrictSchemaKeywordCheck(type)
+**`api/openai-completions.ts`**
+  - moved: streamSimple
+  - missing: ConvertCompletionsMessagesOptions(type), OpenAICompletionsOptions(type), convertMessages(fn), stream(const)
+**`api/openai-responses.ts`**
+  - moved: streamSimple
+  - missing: OpenAIResponsesOptions(type), stream(const)
+
+## 反向候选（Rust pub 符号在范围内 TS 未见同名，含噪音）
+
+- `api/constrained-sampling`: GrammarConstrainedSampling, GrammarToolInputJsonBuffer, append_grammar_tool_input_json_delta, get_grammar_tool_input
+- `api/openai-completions`: openai_completions_stream
+- `api/openai-responses`: create_slot, finalize_stop_reason, finalize_usage, push_text_delta, push_toolcall_delta, text_content_index, toolcall_content_index
+- `api/simple-options`: AdjustedMaxTokens, MIN_ANSWER_TOKENS, adjust_max_tokens_for_thinking, build_base_options, clamp_reasoning, clamp_thinking_budget_to_answer_room, default_thinking_budgets, resolve_sampling_params, thinking_budget_for_level
+- `api/transform-messages`: NormalizeToolCallId
+- `auth/context`: env, file_exists
+- `auth/credential-store`: delete, list, modify
+- `auth/helpers`: LazyOAuthInput, OAuthLoadFn, is_subscription, lazy_oauth, loaded, login_label, resolve, to_auth
+- `auth/oauth/device-code`: OAuthDeviceCodePollFn, poll_oauth_device_code_flow
+- `auth/oauth/oauth-page`: oauth_error_html, oauth_success_html
+- `auth/resolve`: ModelsError, ModelsErrorCode, ProviderAuthRef, env, file_exists
+- `auth/types`: ApiKeyCheckInput, ApiKeyResolveInput, AuthPromptKind, AuthSelectOption, CredentialKind, CredentialModifyFn, account_id, available_model_ids, enterprise_url, kind, manual_code, notify, prompt, secret, select, text, with_signal
+- `models`: CreateProviderOptions, auth, base_url, calculate_cost, check_auth_with_signal, clamp_thinking_level, create_provider, get_auth_for_provider, get_available_with_signal, get_supported_thinking_levels, has_api, id, models_are_equal, with_auth
+- `providers/faux`: FauxProviderHandle, FauxProviderState, FauxResponseFactory, FauxResponseStep, RegisterFauxProviderOptions, faux_assistant_message, faux_default_model, faux_provider, faux_thinking, faux_tool_call, get_pending_response_count, set_responses, stream_with_deltas
+- `types`: AbortError, AbortSignal, ContentBlock, ErrorStopReason, ImageKind, ImagesApi, ImagesProviderId, InputModality, StrictMode, SystemContent, TerminalStopReason, TextKind, TextOrImageContent, ThinkingKind, ToolCallKind, UsageCost, UserContent, abort, aborted, any, cancelled, role, throw_if_aborted, timeout, token
+- `utils/abort`: BoxError, abort_reason, race_with_abort_signal
+- `utils/assistant-message-frame`: AssistantMessageFrame, AssistantMessageFrameEncoder, block, encode, encode_content_event, encode_text_delta, end_block, is_ended, kind, reduce_assistant_message_frames, start_block
+- `utils/diagnostics`: DiagnosticContainer, append_assistant_message_diagnostic, create_assistant_message_diagnostic, extract_diagnostic_error
+- `utils/error-body`: format_provider_error, safe_json_stringify, truncate_error_text
+- `utils/error-stream`: create_error_message, default_usage, stream_error
+- `utils/estimate`: ContextInput, estimate_context_tokens, estimate_message_tokens, estimate_text_and_image_content_tokens, estimate_text_tokens
+- `utils/event-stream`: AssistantMessageEventStream, create_assistant_message_event_stream, poll_next, result, time
+- `utils/headers`: provider_headers_to_record
+- `utils/json-parse`: parse_json_with_repair, parse_streaming_json
+- `utils/overflow`: get_overflow_patterns, is_recoverable_length
+- `utils/provider-retry`: DEFAULT_MAX_RETRY_DELAY_MS, ProviderError, ProviderRequestError, ProviderRetryOptions, get_retry_delay_ms, is_retryable_provider_error
+- `utils/retry`: RetryCallbacks, is_retryable_assistant_error, retry_assistant_call
+- `utils/text`: ContentTextInput, get_system_message_text, render_system_message_update, system_content_text
+- `utils/transcript`: ToolStateChanges, TranscriptTools, collapse_system_messages, create_initial_system_message, declarations_equal, get_current_system_message, get_current_system_prompt, get_current_tools, get_declared_tools, get_initial_system_message, get_tool_state_changes, has_non_additive_tool_changes, has_tool_redefinitions, normalize_context, resolve_transcript, resolve_transcript_tools, to_tool_declaration, without_initial_system_message
+- `utils/typebox-helpers`: StringEnumOptions
+- `utils/uuid`: now_ms, uuidv7_with_timestamp
+- `utils/validation`: validate_tool_arguments

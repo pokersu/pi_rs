@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 
 use crate::types::{
     AssistantMessage, AssistantMessageEvent, CacheRetention, ContentBlock, Context,
-    ErrorStopReason, ImageContent, InputModality, Message, Model, SimpleStreamOptions, StopReason,
+    ErrorStopReason, ImageContent, InputModality, Message, Model, OnPayloadFn,
+    OnProviderStreamEventFn, OnResponseFn, ProviderResponse, SimpleStreamOptions, StopReason,
     StreamFunction, TerminalStopReason, TextContent, TextKind, TextOrImageContent, Tool, ToolCall,
     ToolCallKind, Usage,
 };
@@ -564,6 +565,7 @@ fn convert_tools(tools: &[crate::types::Tool], compat: &Compat) -> Vec<Value> {
             let strict = crate::api::constrained_sampling::resolve_json_schema_strict_sampling(
                 tool,
                 compat.supports_strict_mode,
+                None,
             )
             .unwrap_or_else(|e| panic!("{e}"));
             let parameters =
@@ -706,6 +708,7 @@ impl StreamState {
                 raw_stop_reason: None,
                 end_turn: None,
                 timestamp: crate::utils::uuid::now_ms() as u64,
+                duration_ms: None,
             },
             slots: HashMap::new(),
             saw_terminal: false,
@@ -982,6 +985,7 @@ fn map_stop_reason(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn stream_request(
     base_url: &str,
     api_key: &str,
@@ -989,7 +993,18 @@ async fn stream_request(
     body: Value,
     service_tier: Option<String>,
     stream: &crate::utils::event_stream::AssistantMessageEventStream,
+    on_payload: Option<&OnPayloadFn>,
+    on_response: Option<&OnResponseFn>,
+    on_provider_stream_event: Option<&OnProviderStreamEventFn>,
 ) -> Result<(), String> {
+    // 对应上游 `onPayload`：请求体发出前调用，返回 `Some` 则替换 payload。
+    let mut body = body;
+    if let Some(cb) = on_payload
+        && let Some(replaced) = cb(&body, model).await
+    {
+        body = replaced;
+    }
+
     let client = reqwest::Client::new();
     let url = format!("{}/responses", base_url.trim_end_matches('/'));
     let response = client
@@ -999,6 +1014,19 @@ async fn stream_request(
         .send()
         .await
         .map_err(|e| e.to_string())?;
+
+    // 对应上游 `onResponse`：HTTP 响应后调用。
+    if let Some(cb) = on_response {
+        let provider_response = ProviderResponse {
+            status: response.status().as_u16(),
+            headers: response
+                .headers()
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                .collect(),
+        };
+        cb(&provider_response, model).await;
+    }
 
     if !response.status().is_success() {
         let status = response.status();
@@ -1021,7 +1049,14 @@ async fn stream_request(
             if line.is_empty() {
                 // 空行分隔一个 SSE 事件。
                 if !data_line.is_empty() {
-                    process_event(&data_line, &mut state, stream)?;
+                    process_event(
+                        &data_line,
+                        &mut state,
+                        stream,
+                        model,
+                        on_provider_stream_event,
+                    )
+                    .await?;
                     data_line.clear();
                 }
             } else if let Some(rest) = line.strip_prefix("data:") {
@@ -1055,12 +1090,18 @@ async fn stream_request(
 }
 
 /// 处理单个 SSE 事件（data JSON），映射到 AssistantMessageEvent。
-fn process_event(
+async fn process_event(
     data: &str,
     state: &mut StreamState,
     stream: &crate::utils::event_stream::AssistantMessageEventStream,
+    model: &Model,
+    on_provider_stream_event: Option<&OnProviderStreamEventFn>,
 ) -> Result<(), String> {
     let event: Value = serde_json::from_str(data).map_err(|e| format!("SSE JSON 解析失败: {e}"))?;
+    // 对应上游 `onProviderStreamEvent`：每个解析的 provider 事件观察点。
+    if let Some(cb) = on_provider_stream_event {
+        cb(&event, model).await;
+    }
     let event_type = event.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
     match event_type {
@@ -1353,6 +1394,10 @@ pub fn openai_responses_stream(base_url: String) -> StreamFunction {
         let model = model.clone();
         let body = build_body(&model, context, options);
         let api_key = options.and_then(|o| o.stream.request.api_key.clone());
+        let on_payload = options.and_then(|o| o.stream.request.on_payload.clone());
+        let on_response = options.and_then(|o| o.stream.request.on_response.clone());
+        let on_provider_stream_event =
+            options.and_then(|o| o.stream.on_provider_stream_event.clone());
         let service_tier = options
             .and_then(|o| o.stream.sampling_params.as_ref())
             .and_then(|s| s.get("service_tier"))
@@ -1375,8 +1420,18 @@ pub fn openai_responses_stream(base_url: String) -> StreamFunction {
                     producer.end(Some(error));
                 }
                 Some(key) => {
-                    if let Err(err) =
-                        stream_request(&base_url, &key, &model, body, service_tier, &producer).await
+                    if let Err(err) = stream_request(
+                        &base_url,
+                        &key,
+                        &model,
+                        body,
+                        service_tier,
+                        &producer,
+                        on_payload.as_ref(),
+                        on_response.as_ref(),
+                        on_provider_stream_event.as_ref(),
+                    )
+                    .await
                     {
                         let error =
                             create_error_message(&err, &model.api, &model.provider, &model.id);
@@ -1423,8 +1478,11 @@ mod tests {
             context_window: 64000,
             max_tokens: 8192,
             sampling_params: None,
+            sampling_params_by_thinking_level: None,
             headers: None,
             compat: None,
+            prompt_cache: None,
+            input_limits: None,
         }
     }
 
@@ -1452,6 +1510,7 @@ mod tests {
             raw_stop_reason: None,
             end_turn: None,
             timestamp: 1,
+            duration_ms: None,
         }
     }
 
@@ -1469,6 +1528,7 @@ mod tests {
             added_tool_names: None,
             is_error: false,
             timestamp: 2,
+            duration_ms: None,
         }
     }
 

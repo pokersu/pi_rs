@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 use crate::providers::faux::stream_with_deltas;
 use crate::types::{
     AssistantMessage, AssistantMessageEvent, ContentBlock, Context, ErrorStopReason, Message,
-    Model, SimpleStreamOptions, StopReason, StreamFunction, TextContent, TextKind, Tool, ToolCall,
+    Model, OnPayloadFn, OnProviderStreamEventFn, OnResponseFn, ProviderResponse,
+    SimpleStreamOptions, StopReason, StreamFunction, TextContent, TextKind, Tool, ToolCall,
 };
 use crate::utils::error_stream::{create_error_message, default_usage};
 use crate::utils::event_stream::create_assistant_message_event_stream;
@@ -212,13 +213,25 @@ fn map_finish_reason(reason: &str) -> StopReason {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn stream_request(
     base_url: &str,
     api_key: &str,
     model: &Model,
     body: Value,
     stream: &crate::utils::event_stream::AssistantMessageEventStream,
+    on_payload: Option<&OnPayloadFn>,
+    on_response: Option<&OnResponseFn>,
+    on_provider_stream_event: Option<&OnProviderStreamEventFn>,
 ) -> Result<(), String> {
+    // 对应上游 `onPayload`：请求体发出前调用。
+    let mut body = body;
+    if let Some(cb) = on_payload
+        && let Some(replaced) = cb(&body, model).await
+    {
+        body = replaced;
+    }
+
     let client = reqwest::Client::new();
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let response = client
@@ -228,6 +241,19 @@ async fn stream_request(
         .send()
         .await
         .map_err(|e| e.to_string())?;
+
+    // 对应上游 `onResponse`：HTTP 响应后调用。
+    if let Some(cb) = on_response {
+        let provider_response = ProviderResponse {
+            status: response.status().as_u16(),
+            headers: response
+                .headers()
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                .collect(),
+        };
+        cb(&provider_response, model).await;
+    }
 
     if !response.status().is_success() {
         let status = response.status();
@@ -257,6 +283,11 @@ async fn stream_request(
                 continue;
             }
             let chunk: Value = serde_json::from_str(data).map_err(|e| e.to_string())?;
+
+            // 对应上游 `onProviderStreamEvent`：每个解析的 provider 事件观察点。
+            if let Some(cb) = on_provider_stream_event {
+                cb(&chunk, model).await;
+            }
 
             if let Some(choices) = chunk.get("choices").and_then(|c| c.as_array())
                 && let Some(choice) = choices.first()
@@ -356,6 +387,7 @@ async fn stream_request(
         raw_stop_reason: finish_reason,
         end_turn: None,
         timestamp: crate::utils::uuid::now_ms() as u64,
+        duration_ms: None,
     };
 
     stream_with_deltas(stream, &message);
@@ -373,6 +405,10 @@ pub fn openai_completions_stream(base_url: String) -> StreamFunction {
         let model = model.clone();
         let body = build_body(&model, context, options);
         let api_key = options.and_then(|o| o.stream.request.api_key.clone());
+        let on_payload = options.and_then(|o| o.stream.request.on_payload.clone());
+        let on_response = options.and_then(|o| o.stream.request.on_response.clone());
+        let on_provider_stream_event =
+            options.and_then(|o| o.stream.on_provider_stream_event.clone());
         let provider = model.provider.clone();
         tokio::spawn(async move {
             match api_key {
@@ -390,7 +426,17 @@ pub fn openai_completions_stream(base_url: String) -> StreamFunction {
                     producer.end(Some(error));
                 }
                 Some(key) => {
-                    if let Err(err) = stream_request(&base_url, &key, &model, body, &producer).await
+                    if let Err(err) = stream_request(
+                        &base_url,
+                        &key,
+                        &model,
+                        body,
+                        &producer,
+                        on_payload.as_ref(),
+                        on_response.as_ref(),
+                        on_provider_stream_event.as_ref(),
+                    )
+                    .await
                     {
                         let error =
                             create_error_message(&err, &model.api, &model.provider, &model.id);
