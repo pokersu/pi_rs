@@ -277,6 +277,9 @@ impl Models {
                     while let Some(event) = inner.next().await {
                         producer.push(event);
                     }
+                    // 对应上游 forwardStream：转发结束后传播内层的最终结果并关闭外层流。
+                    let result = inner.result().await;
+                    producer.end(Some(result));
                 }
                 Ok(None) => {
                     let error = create_error_message(
@@ -383,6 +386,9 @@ impl Models {
                             while let Some(event) = inner.next().await {
                                 producer.push(event);
                             }
+                            // 对应上游 forwardStream：转发结束后传播内层的最终结果并关闭外层流。
+                            let result = inner.result().await;
+                            producer.end(Some(result));
                         }
                         None => {
                             let error = create_error_message(

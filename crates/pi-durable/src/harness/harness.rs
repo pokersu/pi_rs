@@ -305,6 +305,10 @@ impl HarnessImpl {
             self_ref: OnceLock::new(),
         });
         let _ = harness.self_ref.set(Arc::downgrade(&harness));
+        // Scheduler 的 agent/env 闭包通过 self_cell 访问 harness（构造期间无法引用
+        // harness 自身）；构造完成后必须 set，否则闭包调用时 `expect("harness")` panic。
+        // 强引用会让 harness 生命周期延长到 Scheduler 停止，与 TS 的 `this` 语义一致。
+        let _ = self_cell.set(Arc::clone(&harness));
         harness
     }
 
