@@ -1,4 +1,4 @@
-//! 把 HTTP 工具配置转换为 `AgentTool` 并执行请求。
+//! 把 HTTP 工具配置转换为 `ToolRegistration` 并执行请求。
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -6,51 +6,77 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use pi_agent_core::{AgentTool, AgentToolResult};
+use serde_json::{Value as JsonValue, json};
+
 use pi_ai::{TextContent, TextKind, TextOrImageContent};
+use pi_durable::chord::context::Context;
+use pi_durable::harness::define::define_tool;
+use pi_durable::harness::types::{ToolExecutionApi, ToolExecutionResult, ToolRegistration};
+use pi_durable::session::SessionError;
 
 use crate::http::config::{AuthConfig, HttpToolConfig};
 
 /// 响应体截断上限（字符）。
 const MAX_BODY_CHARS: usize = 8 * 1024;
 
-/// 把 HTTP 工具配置转换为 `AgentTool`。
-pub fn config_to_tool(config: HttpToolConfig) -> AgentTool {
-    let label = config.name.clone();
-    let name = config.name.clone();
-    let description = config.description.clone();
-    let parameters = config.parameters.clone();
-    AgentTool {
-        label,
-        tool: pi_ai::Tool {
-            name,
-            description,
-            parameters,
-            constrained_sampling: None,
-        },
-        execute: Arc::new(move |_id, params, _signal, _on_update| {
-            let config = config.clone();
-            Box::pin(async move { execute_http(&config, &params).await })
-        }),
-        execution_mode: None,
-        prepare_arguments: None,
-        replay: None,
+/// 由 HTTP 工具配置构造的 [`ToolRegistration`]。
+struct HttpTool {
+    name: String,
+    description: String,
+    parameters: JsonValue,
+    config: HttpToolConfig,
+}
+
+#[async_trait::async_trait]
+impl ToolRegistration for HttpTool {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn parameters(&self) -> &JsonValue {
+        &self.parameters
+    }
+
+    async fn execute(
+        &self,
+        args: JsonValue,
+        _api: Arc<dyn ToolExecutionApi>,
+        _context: Arc<dyn Context>,
+    ) -> Result<ToolExecutionResult, SessionError> {
+        execute_http(&self.config, &args).await
     }
 }
 
-async fn execute_http(config: &HttpToolConfig, params: &serde_json::Value) -> AgentToolResult {
-    let params_obj: serde_json::Map<String, serde_json::Value> =
+/// 把 HTTP 工具配置转换为 `ToolRegistration`。
+pub fn config_to_tool(config: HttpToolConfig) -> Arc<dyn ToolRegistration> {
+    define_tool(HttpTool {
+        name: config.name.clone(),
+        description: config.description.clone(),
+        parameters: config.parameters.clone(),
+        config,
+    })
+}
+
+async fn execute_http(
+    config: &HttpToolConfig,
+    params: &JsonValue,
+) -> Result<ToolExecutionResult, SessionError> {
+    let params_obj: serde_json::Map<String, JsonValue> =
         params.as_object().cloned().unwrap_or_default();
 
     // 1. 填充 URL 占位符（path 参数）。
     let placeholders = extract_placeholders(&config.request.url);
-    let url = fill_url(&config.request.url, &params_obj).unwrap_or_else(|e| panic!("{e}"));
+    let url = fill_url(&config.request.url, &params_obj).map_err(SessionError::Message)?;
 
     // 2. 按 method 决定剩余参数的绑定位置。
     let method = config.request.method.to_ascii_uppercase();
     let body_method = matches!(method.as_str(), "POST" | "PUT" | "PATCH");
 
-    let remaining: serde_json::Map<String, serde_json::Value> = params_obj
+    let remaining: serde_json::Map<String, JsonValue> = params_obj
         .iter()
         .filter(|(k, _)| !placeholders.contains(k))
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -61,16 +87,14 @@ async fn execute_http(config: &HttpToolConfig, params: &serde_json::Value) -> Ag
 
     // 3. 认证。
     if let Some(auth) = &config.auth {
-        apply_auth(auth, &mut headers, &mut query_params);
+        apply_auth(auth, &mut headers, &mut query_params)?;
     }
 
     // 默认 User-Agent：GitHub 等 API 要求请求带 UA，配置未指定时自动补上。
     ensure_user_agent(&mut headers);
 
     let mut final_url = url;
-    if body_method {
-        // 剩余参数作为 JSON body（query 只含 auth 注入的 query token）。
-    } else {
+    if !body_method {
         for (k, v) in &remaining {
             query_params.push((k.clone(), value_to_string(v)));
         }
@@ -94,60 +118,58 @@ async fn execute_http(config: &HttpToolConfig, params: &serde_json::Value) -> Ag
         req = req.header(k, v);
     }
     if body_method {
-        req = req.json(&serde_json::Value::Object(remaining));
+        req = req.json(&JsonValue::Object(remaining));
     }
     let resp = req
         .timeout(Duration::from_secs(config.timeout_secs))
         .send()
         .await
-        .unwrap_or_else(|e| panic!("请求失败: {e}"));
+        .map_err(|e| SessionError::Message(format!("请求失败: {e}")))?;
 
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     let body = truncate_chars(&body, MAX_BODY_CHARS);
 
-    if status.is_success() {
-        AgentToolResult {
-            content: vec![TextOrImageContent::Text(TextContent {
-                kind: TextKind,
-                text: format!("HTTP {}\n\n{body}", status.as_u16()),
-                text_signature: None,
-            })],
-            details: serde_json::json!({ "status": status.as_u16() }),
-            usage: None,
-            added_tool_names: None,
-            terminate: false,
-            is_error: false,
-            structured_content: None,
-        }
-    } else {
-        panic!("HTTP {}: {body}", status.as_u16());
-    }
+    let content = vec![TextOrImageContent::Text(TextContent {
+        kind: TextKind,
+        text: if status.is_success() {
+            format!("HTTP {}\n\n{body}", status.as_u16())
+        } else {
+            format!("HTTP {}: {body}", status.as_u16())
+        },
+        text_signature: None,
+    })];
+    Ok(ToolExecutionResult {
+        content: Some(content),
+        details: Some(json!({ "status": status.as_u16() })),
+        is_error: Some(!status.is_success()),
+        ..Default::default()
+    })
 }
 
 fn apply_auth(
     auth: &AuthConfig,
     headers: &mut BTreeMap<String, String>,
     query_params: &mut Vec<(String, String)>,
-) {
+) -> Result<(), SessionError> {
     match auth {
         AuthConfig::Bearer { token_env } => {
-            let token = env_token(token_env);
+            let token = env_token(token_env)?;
             headers.insert("Authorization".to_string(), format!("Bearer {token}"));
         }
         AuthConfig::Header {
             header_name,
             token_env,
         } => {
-            let token = env_token(token_env);
+            let token = env_token(token_env)?;
             headers.insert(header_name.clone(), token);
         }
         AuthConfig::Basic {
             username_env,
             password_env,
         } => {
-            let username = env_token(username_env);
-            let password = env_token(password_env);
+            let username = env_token(username_env)?;
+            let password = env_token(password_env)?;
             let encoded = STANDARD.encode(format!("{username}:{password}"));
             headers.insert("Authorization".to_string(), format!("Basic {encoded}"));
         }
@@ -155,16 +177,17 @@ fn apply_auth(
             param_name,
             token_env,
         } => {
-            let token = env_token(token_env);
+            let token = env_token(token_env)?;
             query_params.push((param_name.clone(), token));
         }
     }
+    Ok(())
 }
 
-fn env_token(name: &str) -> String {
+fn env_token(name: &str) -> Result<String, SessionError> {
     match std::env::var(name) {
-        Ok(v) if !v.trim().is_empty() => v,
-        _ => panic!("缺少环境变量: {name}"),
+        Ok(v) if !v.trim().is_empty() => Ok(v),
+        _ => Err(SessionError::Message(format!("缺少环境变量: {name}"))),
     }
 }
 
@@ -190,10 +213,7 @@ pub fn extract_placeholders(url: &str) -> Vec<String> {
 }
 
 /// 用参数填充 URL 占位符（path 段做 percent-encoding）。
-pub fn fill_url(
-    url: &str,
-    params: &serde_json::Map<String, serde_json::Value>,
-) -> Result<String, String> {
+pub fn fill_url(url: &str, params: &serde_json::Map<String, JsonValue>) -> Result<String, String> {
     let mut result = String::new();
     let mut chars = url.chars();
     while let Some(c) = chars.next() {
@@ -217,10 +237,10 @@ pub fn fill_url(
 }
 
 /// 把 JSON 值转为字符串（用于 query/path 参数）。
-fn value_to_string(value: &serde_json::Value) -> String {
+fn value_to_string(value: &JsonValue) -> String {
     match value {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Null => String::new(),
+        JsonValue::String(s) => s.clone(),
+        JsonValue::Null => String::new(),
         other => other.to_string(),
     }
 }

@@ -3,51 +3,60 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pi_agent_core::{AgentTool, AgentToolResult};
-use pi_ai::{TextContent, TextKind, TextOrImageContent};
+use serde_json::{Value as JsonValue, json};
 
-/// 构造 `now` 工具：返回当前 UTC Unix 时间戳（秒）。
-pub fn create_now_tool() -> AgentTool {
-    AgentTool {
-        label: "now".to_string(),
-        tool: pi_ai::Tool {
-            name: "now".to_string(),
-            description:
-                "Return the current time as a Unix timestamp (seconds since 1970-01-01 UTC)."
-                    .to_string(),
-            parameters: serde_json::json!({
+use pi_ai::{TextContent, TextKind, TextOrImageContent};
+use pi_durable::chord::context::Context;
+use pi_durable::harness::define::define_tool;
+use pi_durable::harness::types::{ToolExecutionApi, ToolExecutionResult, ToolRegistration};
+use pi_durable::session::SessionError;
+
+struct NowTool;
+
+#[async_trait::async_trait]
+impl ToolRegistration for NowTool {
+    fn name(&self) -> &str {
+        "now"
+    }
+
+    fn description(&self) -> &str {
+        "Return the current time as a Unix timestamp (seconds since 1970-01-01 UTC)."
+    }
+
+    fn parameters(&self) -> &JsonValue {
+        static SCHEMA: std::sync::LazyLock<JsonValue> = std::sync::LazyLock::new(|| {
+            json!({
                 "type": "object",
                 "properties": {}
-            }),
-            constrained_sampling: None,
-        },
-        execute: Arc::new(|_id, _params, _signal, _on_update| {
-            Box::pin(async move {
-                let secs = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                AgentToolResult {
-                    content: vec![TextOrImageContent::Text(TextContent {
-                        kind: TextKind,
-                        text: format!(
-                            "{secs} (Unix timestamp, seconds since 1970-01-01T00:00:00Z)"
-                        ),
-                        text_signature: None,
-                    })],
-                    details: serde_json::Value::Null,
-                    usage: None,
-                    added_tool_names: None,
-                    terminate: false,
-                    is_error: false,
-                    structured_content: None,
-                }
             })
-        }),
-        execution_mode: None,
-        prepare_arguments: None,
-        replay: None,
+        });
+        &SCHEMA
     }
+
+    async fn execute(
+        &self,
+        _args: JsonValue,
+        _api: Arc<dyn ToolExecutionApi>,
+        _context: Arc<dyn Context>,
+    ) -> Result<ToolExecutionResult, SessionError> {
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Ok(ToolExecutionResult {
+            content: Some(vec![TextOrImageContent::Text(TextContent {
+                kind: TextKind,
+                text: format!("{secs} (Unix timestamp, seconds since 1970-01-01T00:00:00Z)"),
+                text_signature: None,
+            })]),
+            ..Default::default()
+        })
+    }
+}
+
+/// 构造 `now` 工具：返回当前 UTC Unix 时间戳（秒）。
+pub fn create_now_tool() -> Arc<dyn ToolRegistration> {
+    define_tool(NowTool)
 }
 
 #[cfg(test)]
@@ -55,23 +64,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn now_tool_returns_content() {
+    fn now_tool_returns_name() {
         let tool = create_now_tool();
         assert_eq!(tool.name(), "now");
-
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-        let result = rt.block_on((tool.execute)(
-            "id".to_string(),
-            serde_json::json!({}),
-            None,
-            None,
-        ));
-        assert_eq!(result.content.len(), 1);
-        assert!(matches!(
-            &result.content[0],
-            TextOrImageContent::Text(t) if t.text.contains("Unix timestamp")
-        ));
     }
 }

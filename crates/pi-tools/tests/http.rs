@@ -75,7 +75,10 @@ fn duplicate_names_are_rejected() {
     std::fs::write(dir.join("a.json"), sample_config_json()).unwrap();
     std::fs::write(dir.join("b.json"), sample_config_json()).unwrap();
 
-    let err = load_tools_from_dir(&dir).unwrap_err();
+    let err = match load_tools_from_dir(&dir) {
+        Ok(_) => panic!("expected duplicate name error"),
+        Err(error) => error,
+    };
     assert!(err.to_string().contains("重复的工具名"));
 
     std::fs::remove_dir_all(&dir).ok();

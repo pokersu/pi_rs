@@ -60,10 +60,22 @@ async fn main() {
         .expect("未找到可用模型（deepseek-chat / gpt-4o-mini）");
     let (provider, model_id) = (model.provider.clone(), model.id.clone());
 
-    // 2. 存储、注册表与内置工具。
+    // 2. 存储、注册表与内置工具 + pi-tools。
     let storage = Arc::new(MemoryStorage::new());
     let registry = create_registry();
     registry.install(Arc::new(CODING_TOOLS.clone()));
+
+    // pi-tools：now + HTTP 工具（从仓库根的 tools.d 目录加载 .json 配置）。
+    // 运行 `cargo run -p demo-agent` 时工作目录是仓库根；若从别处运行可用
+    // `PI_TOOLS_DIR` 环境变量覆盖工具配置目录。
+    let tools_dir = std::env::var("PI_TOOLS_DIR").unwrap_or_else(|_| "tools.d".to_string());
+    let http_tools = pi_tools::load_tools_from_dir(std::path::Path::new(&tools_dir))
+        .unwrap_or_else(|error| {
+            eprintln!("[提示] 未加载 HTTP 工具：{error}");
+            Vec::new()
+        });
+    let pi_tools_extension = pi_tools::extension(http_tools);
+    registry.install(Arc::new(pi_tools_extension.clone()));
 
     // 3. 环境：每个会话用其 `cwd` 构建真实文件系统 + Shell。
     let cwd = std::env::current_dir()
@@ -92,12 +104,13 @@ async fn main() {
     .await
     .expect("open harness");
 
-    // 5. 根会话：模型 + coding-tools。
+    // 5. 根会话：模型 + coding-tools + pi-tools。
     let change = AgentChange {
         model: FieldChange::Set(ModelRef { provider, model_id }),
-        extensions: FieldChange::Set(ExtensionChangeSelection::Exactly(vec![Arc::new(
-            CODING_TOOLS.clone(),
-        )])),
+        extensions: FieldChange::Set(ExtensionChangeSelection::Exactly(vec![
+            Arc::new(CODING_TOOLS.clone()),
+            Arc::new(pi_tools_extension),
+        ])),
         ..Default::default()
     };
     let conversation = harness

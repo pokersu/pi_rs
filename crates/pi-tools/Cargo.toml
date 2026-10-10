@@ -7,8 +7,9 @@ description = "Reusable agent tools for pi"
 publish = false
 
 [dependencies]
-pi-agent-core = { path = "../pi-agent-core" }
+pi-durable = { path = "../pi-durable" }
 pi-ai = { path = "../pi-ai" }
+async-trait.workspace = true
 base64.workspace = true
 reqwest.workspace = true
 serde.workspace = true

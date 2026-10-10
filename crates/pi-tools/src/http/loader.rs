@@ -2,8 +2,9 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use pi_agent_core::AgentTool;
+use pi_durable::harness::types::ToolRegistration;
 
 use crate::http::config::HttpToolConfig;
 use crate::http::executor::config_to_tool;
@@ -45,7 +46,7 @@ impl std::error::Error for LoadError {}
 /// 扫描目录下所有 `.json` 文件，每个文件加载成一个 HTTP 工具。
 ///
 /// 工具名在目录内必须唯一，重复时返回错误。
-pub fn load_tools_from_dir(dir: &Path) -> Result<Vec<AgentTool>, LoadError> {
+pub fn load_tools_from_dir(dir: &Path) -> Result<Vec<Arc<dyn ToolRegistration>>, LoadError> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
         .map_err(|e| LoadError::at(dir, format!("无法读取目录: {e}")))?
         .filter_map(|e| e.ok())
@@ -74,7 +75,7 @@ pub fn load_tools_from_dir(dir: &Path) -> Result<Vec<AgentTool>, LoadError> {
 }
 
 /// 读取单个配置文件并转成工具。
-pub fn load_tool_file(path: &Path) -> Result<AgentTool, LoadError> {
+pub fn load_tool_file(path: &Path) -> Result<Arc<dyn ToolRegistration>, LoadError> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| LoadError::at(path, format!("无法读取文件: {e}")))?;
     let config: HttpToolConfig = serde_json::from_str(&content)
