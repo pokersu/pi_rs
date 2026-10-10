@@ -836,6 +836,7 @@ impl GenerationTaskDefinition {
                         max_retry_delay_ms: None,
                         on_payload: None,
                         on_response: None,
+                        env: None,
                     },
                     wait: None,
                 }),
@@ -1307,11 +1308,13 @@ impl GenerationTaskDefinition {
         }
         let conversation_id = runtime.conversation_id();
         let runtime_for_commit = Arc::clone(runtime);
+        let start_run = Arc::clone(&self.start_run);
         let generation_task = Arc::clone(&self.generation_task);
         runtime
             .commit(
                 Box::new(move |tx, _current| {
                     let runtime = Arc::clone(&runtime_for_commit);
+                    let start_run = Arc::clone(&start_run);
                     let generation_task = Arc::clone(&generation_task);
                     let message = message.clone();
                     Box::pin(async move {
@@ -1378,6 +1381,9 @@ impl GenerationTaskDefinition {
                             SubmissionSettlement::Done { answer: entry.id },
                         )
                         .map_err(session_error)?;
+                        if !boundary_result.users.is_empty() {
+                            start_run(tx, conversation_id, &live, boundary_result.users).await?;
+                        }
                         Ok(Some(result))
                     })
                 }),
@@ -1924,6 +1930,7 @@ impl TaskDefinitionSpec for GenerationTaskDefinition {
                         max_retry_delay_ms: None,
                         on_payload: None,
                         on_response: None,
+                        env: None,
                     }),
                 )
                 .await

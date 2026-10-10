@@ -153,15 +153,18 @@ impl Seq {
 
 /// 对应 `ConversationOwnership`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ConversationOwnership {
     /// 无主（ownerless）。
     Ownerless,
     /// 由某个任务拥有。
+    #[serde(rename_all = "camelCase")]
     Task { task_id: TaskId },
 }
 
 /// 对应 `ConversationRecord.parent`：分叉来源与其（含）父条目。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConversationParent {
     /// 源会话。
     pub conversation_id: ConversationId,
@@ -171,6 +174,7 @@ pub struct ConversationParent {
 
 /// 对应 `ConversationRecord.owner`：创建边，用于归属、子树中止与空闲等待。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConversationOwner {
     /// 所属会话。
     pub conversation_id: ConversationId,
@@ -184,8 +188,10 @@ pub struct ConversationRecord {
     /// 会话 ID。
     pub id: ConversationId,
     /// 分叉来源与其父条目。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<ConversationParent>,
     /// 创建边。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<ConversationOwner>,
 }
 
@@ -193,6 +199,7 @@ pub struct ConversationRecord {
 
 /// 对应 `ContextEdit`：对某个可见条目在模型上下文中的贡献做不可变覆盖。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "lowercase")]
 pub enum ContextEdit {
     /// 对应 `action: "omit"`：省略该条目的模型消息。
     Omit {
@@ -212,6 +219,7 @@ pub enum ContextEdit {
 
 /// 对应 `EntryRecord`：不可变的 transcript 事件（模型面与应用面负载分开）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EntryRecord {
     /// 条目 ID。
     pub id: EntryId,
@@ -220,14 +228,19 @@ pub struct EntryRecord {
     /// 应用定义的条目判别符。
     pub kind: String,
     /// 贡献给模型上下文的消息；展示或记账类条目缺省。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<Vec<Message>>,
     /// 供视图/扩展/记账逻辑使用的 JSON 负载。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<JsonValue>,
     /// 本条目选中的活动上下文的首条目。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub head: Option<EntryId>,
     /// 对更早可见条目的仅上下文覆盖。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub edits: Option<Vec<ContextEdit>>,
     /// 追加本条目的任务（由 durable 工作产生时）。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub by_task_id: Option<TaskId>,
 }
 
@@ -303,12 +316,13 @@ pub struct TaskOutcomeError {
     /// 错误消息。
     pub message: String,
     /// 可选的结构化诊断数据。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<JsonValue>,
 }
 
 /// 对应 `TaskOutcome<R>`：任务进入终态时的持久化原因与可选结果。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
 pub enum TaskOutcome<R> {
     /// 完成。
     Completed {
@@ -320,13 +334,16 @@ pub enum TaskOutcome<R> {
         /// 错误快照。
         error: TaskOutcomeError,
         /// 可选结果。
+        #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<R>,
     },
     /// 由任务的 abort 协议处理的显式取消。
     Aborted {
         /// 可选原因。
+        #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
         /// 可选结果。
+        #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<R>,
     },
     /// 定义或迁移缺失，无法继续。
@@ -369,6 +386,7 @@ pub enum TaskStatus {
 
 /// 对应 `TaskState<S, R>`：任务的完整持久执行状态。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
 pub enum TaskState<S, R> {
     /// 可被调度。
     Pending {
@@ -419,6 +437,7 @@ impl<S, R> TaskState<S, R> {
 /// 上游用「`TaskRecordBase` + （带 memos / 不带 memos）的判别联合」表达；
 /// Rust 统一为 `memos: Option<...>`（`completing`/`terminal` 时约定为 `None`）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskRecord<I, S, R> {
     /// 任务 ID。
     pub id: TaskId<R>,
@@ -431,27 +450,33 @@ pub struct TaskRecord<I, S, R> {
     /// 原始任务输入。
     pub input: I,
     /// 子任务的拥有者；会话拥有的任务缺省。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub owner: Option<TaskId>,
     /// 是否被排除在常规空闲等待 / 会话中止 / 级联之外。
     pub background: bool,
     /// 持久的中止标记。
     pub abort_requested: bool,
     /// 首次进入 `running` 的墙钟毫秒（由 Session 盖章）。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<u64>,
     /// 进入 `terminal` 的墙钟毫秒（由 Session 盖章）。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<u64>,
     /// 状态机。
     pub state: TaskState<S, R>,
     /// 任务可运行期间保留的「首写者胜」小值。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub memos: Option<std::collections::BTreeMap<String, JsonValue>>,
 }
 
 /// 对应 `TaskOwnership`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
 pub enum TaskOwnership {
     /// 由会话拥有。
     Conversation,
     /// 由另一任务拥有。
+    #[serde(rename_all = "camelCase")]
     Task {
         /// 拥有者任务。
         task_id: TaskId,
@@ -476,6 +501,7 @@ pub enum SubmissionStatus {
 
 /// `input` 类提交的生命周期。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
 pub enum InputSubmissionStatus {
     /// 已接纳但尚未进入 transcript。
     Queued,
@@ -494,16 +520,19 @@ pub enum InputSubmissionStatus {
     /// 终结且不再可能应答。
     Unanswered {
         /// 可选条目。
+        #[serde(skip_serializing_if = "Option::is_none")]
         entry: Option<EntryId>,
         /// 原因。
         reason: String,
         /// 可选细节。
+        #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<JsonValue>,
     },
 }
 
 /// `write` 类提交的生命周期。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
 pub enum WriteSubmissionStatus {
     /// 已接纳但尚未追加。
     Queued,
@@ -517,36 +546,44 @@ pub enum WriteSubmissionStatus {
         /// 原因。
         reason: String,
         /// 可选细节。
+        #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<JsonValue>,
     },
 }
 
 /// 每种提交状态共有的身份字段。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubmissionIdentity {
     /// 提交 ID。
     pub id: SubmissionId,
     /// 所属会话。
     pub conversation_id: ConversationId,
     /// 宿主提供的去重键（会话内唯一）。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
 }
 
 /// 对应 `SubmissionRecord`：一次被接纳的用户输入或被动写入的持久生命周期。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum SubmissionRecord {
     /// `type: "input"`。
     Input {
         /// 身份字段。
+        #[serde(flatten)]
         identity: SubmissionIdentity,
         /// 生命周期。
+        #[serde(flatten)]
         status: InputSubmissionStatus,
     },
     /// `type: "write"`。
     Write {
         /// 身份字段。
+        #[serde(flatten)]
         identity: SubmissionIdentity,
         /// 生命周期。
+        #[serde(flatten)]
         status: WriteSubmissionStatus,
     },
 }
@@ -581,6 +618,7 @@ impl SubmissionRecord {
 
 /// 对应 `SubmissionSettlement`：为提交准备的终态。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
 pub enum SubmissionSettlement {
     /// 完成。
     Done {
@@ -592,6 +630,7 @@ pub enum SubmissionSettlement {
         /// 原因。
         reason: String,
         /// 可选细节。
+        #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<JsonValue>,
     },
 }
@@ -600,6 +639,7 @@ pub enum SubmissionSettlement {
 
 /// 对应会话文档的 `history`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ConversationHistory {
     /// 只保留当前状态。
     Latest,
@@ -609,6 +649,7 @@ pub enum ConversationHistory {
 
 /// 对应会话文档的 `fork`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ConversationFork {
     /// 从当前源状态或定义的初始值初始化分叉。
     Current,
@@ -623,15 +664,18 @@ pub enum ConversationFork {
 /// 上游把 history/fork 放在记录顶层（只有会话文档声明），因为它们描述的是保留语义而不是身份；
 /// 地址相等性与扫描匹配都不看它们。定义侧的语义见 [`DocumentSemantics`]。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
 pub enum DocumentScope {
     /// 会话级单例。
     Session,
     /// 会话文档。
+    #[serde(rename_all = "camelCase")]
     Conversation {
         /// 所属会话。
         conversation_id: ConversationId,
     },
     /// 任务文档。
+    #[serde(rename_all = "camelCase")]
     Task {
         /// 所属任务。
         task_id: TaskId,
@@ -656,22 +700,25 @@ pub enum DocumentSemantics {
 
 /// 对应 `DocumentRecord`：一次「创建到退役」的文档化身记录。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DocumentRecord {
     /// 化身 ID（同一逻辑文档重建时不会复用）。
     pub id: DocumentId,
     /// 稳定的文档定义 kind。
     pub kind: String,
     /// 家族成员键；单例文档缺省。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     /// 创建该化身的提交（由存储盖章）。
     pub created_at: Seq,
     /// 退役该化身的提交；仍是当前时缺省。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub retired_at: Option<Seq>,
     /// 对应会话文档的 `history`；非会话文档缺省（上游记录顶层字段）。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub history: Option<ConversationHistory>,
     /// 对应会话文档的 `fork`；非会话文档缺省。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fork: Option<ConversationFork>,
     /// 作用域（不含 history/fork）。
     pub scope: DocumentScope,
@@ -679,18 +726,20 @@ pub struct DocumentRecord {
 
 /// 对应 `DocumentCreate`：创建新 `DocumentRecord` 时提供的字段（不含存储盖章的 `createdAt`/`retiredAt`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DocumentCreate {
     /// 化身 ID。
     pub id: DocumentId,
     /// 文档定义 kind。
     pub kind: String,
     /// 家族成员键。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     /// 对应会话文档的 `history`；非会话文档缺省。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub history: Option<ConversationHistory>,
     /// 对应会话文档的 `fork`；非会话文档缺省。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fork: Option<ConversationFork>,
     /// 作用域（不含 history/fork）。
     pub scope: DocumentScope,
@@ -1246,6 +1295,7 @@ pub struct DocumentBase {
 
 /// 对应 `DocumentContent`：完整 checkpoint 或一批 chord 操作。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
 pub enum DocumentContent {
     /// 完整值。
     Base(DocumentBase),

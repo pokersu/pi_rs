@@ -2,6 +2,8 @@
 //!
 //! 通过服务器代理的流函数：服务器剥离 partial 字段以降低带宽，客户端重建完整事件。
 
+use std::collections::HashMap;
+
 use futures::StreamExt;
 use pi_ai::{
     AbortSignal, AssistantMessage, AssistantMessageEvent, CacheRetention, ContentBlock, Context,
@@ -74,6 +76,7 @@ pub enum ProxyAssistantMessageEvent {
 fn process_proxy_event(
     proxy_event: &ProxyAssistantMessageEvent,
     partial: &mut AssistantMessage,
+    partial_json: &mut HashMap<usize, String>,
 ) -> Option<AssistantMessageEvent> {
     match proxy_event {
         ProxyAssistantMessageEvent::Start => Some(AssistantMessageEvent::Start {
@@ -194,6 +197,8 @@ fn process_proxy_event(
                     namespace: None,
                 }),
             );
+            // 对应上游：toolcall_start 初始化原始 JSON 文本累积。
+            partial_json.insert(*content_index, String::new());
             Some(AssistantMessageEvent::ToolCallStart {
                 content_index: *content_index,
                 partial: partial.clone(),
@@ -204,8 +209,10 @@ fn process_proxy_event(
             delta,
         } => {
             if let ContentBlock::ToolCall(tc) = &mut partial.content[*content_index] {
-                let accumulated = tc.arguments.to_string() + delta;
-                tc.arguments = parse_streaming_json(Some(&accumulated));
+                // 对应上游：在原始 partialJson 文本上累积，而非在已解析参数的再序列化上累积。
+                let raw = partial_json.entry(*content_index).or_default();
+                raw.push_str(delta);
+                tc.arguments = parse_streaming_json(Some(raw));
             } else {
                 panic!("Received toolcall_delta for non-toolCall content");
             }
@@ -222,6 +229,8 @@ fn process_proxy_event(
             if let ContentBlock::ToolCall(tc) = &mut partial.content[*content_index] {
                 *tc = tool_call.clone();
             }
+            // 对应上游：toolcall_end 删除 scratch 缓冲。
+            partial_json.remove(content_index);
             Some(AssistantMessageEvent::ToolCallEnd {
                 content_index: *content_index,
                 tool_call: tool_call.clone(),
@@ -319,9 +328,10 @@ pub fn stream_proxy(
     let stream = create_assistant_message_event_stream();
     let producer = stream.clone();
     tokio::spawn(async move {
-        let result = proxy_request(&model, &context, &options, &producer).await;
+        let mut partial = partial_message(&model);
+        let result = proxy_request(&model, &context, &options, &producer, &mut partial).await;
         if let Err(message) = result {
-            let mut partial = partial_message(&model);
+            // 对应上游：错误/中止时把已累积内容的 partial 作为 error 事件发出，而非新建空 partial。
             let reason = if options
                 .signal
                 .as_ref()
@@ -337,7 +347,7 @@ pub fn stream_proxy(
             } else {
                 StopReason::Error
             };
-            partial.error_message = Some(message.clone());
+            partial.error_message = Some(message);
             producer.push(AssistantMessageEvent::Error {
                 reason,
                 error: partial.clone(),
@@ -374,6 +384,7 @@ async fn proxy_request(
     context: &Context,
     options: &ProxyStreamOptions,
     stream: &AssistantMessageEventStream,
+    partial: &mut AssistantMessage,
 ) -> Result<(), String> {
     let client = reqwest::Client::new();
     // 对应 `buildProxyRequestOptions`：提取可序列化选项。
@@ -418,7 +429,7 @@ async fn proxy_request(
         return Err(error_message);
     }
 
-    let mut partial = partial_message(model);
+    let mut partial_json: HashMap<usize, String> = HashMap::new();
     let mut byte_stream = response.bytes_stream();
     let mut buffer = String::new();
     let mut saw_terminal_event = false;
@@ -453,7 +464,22 @@ async fn proxy_request(
             }
             let proxy_event: ProxyAssistantMessageEvent =
                 serde_json::from_str(data).map_err(|e| e.to_string())?;
-            if let Some(event) = process_proxy_event(&proxy_event, &mut partial) {
+            // 对应上游：协议违规（类型不符的增量事件）抛 Error，被外层 catch 捕获 → 发 error 事件。
+            // 这里用 catch_unwind 捕获 panic，提取消息后作为 Err 返回，让流正常结束。
+            let event = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                process_proxy_event(&proxy_event, partial, &mut partial_json)
+            })) {
+                Ok(event) => event,
+                Err(payload) => {
+                    let message = payload
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                        .unwrap_or("Proxy protocol violation");
+                    return Err(message.to_string());
+                }
+            };
+            if let Some(event) = event {
                 if matches!(
                     event,
                     AssistantMessageEvent::Done { .. } | AssistantMessageEvent::Error { .. }
@@ -482,7 +508,7 @@ async fn proxy_request(
             if !data.is_empty() {
                 let proxy_event: ProxyAssistantMessageEvent =
                     serde_json::from_str(data).map_err(|e| e.to_string())?;
-                if let Some(event) = process_proxy_event(&proxy_event, &mut partial) {
+                if let Some(event) = process_proxy_event(&proxy_event, partial, &mut partial_json) {
                     if matches!(
                         event,
                         AssistantMessageEvent::Done { .. } | AssistantMessageEvent::Error { .. }

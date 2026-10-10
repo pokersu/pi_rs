@@ -57,6 +57,10 @@ pub struct TruncationDetails {
     pub output_bytes: usize,
     pub last_line_partial: bool,
     pub first_line_exceeds_limit: bool,
+    /// 生效的行数上限（对应 `TruncationResult.maxLines`）。
+    pub max_lines: usize,
+    /// 生效的字节上限（对应 `TruncationResult.maxBytes`）。
+    pub max_bytes: usize,
 }
 
 fn truncation_details(
@@ -76,6 +80,8 @@ fn truncation_details(
         output_bytes,
         last_line_partial: result.last_line_partial,
         first_line_exceeds_limit: result.first_line_exceeds_limit,
+        max_lines: result.max_lines,
+        max_bytes: result.max_bytes,
     }
 }
 

@@ -166,6 +166,21 @@ fn symlink_refused(path: &str) -> FileError {
     )
 }
 
+/// 对应上游退出码计算：进程被信号终止时返回 128 + 信号编号（避免把 OOM 等误认为成功退出）。
+fn exit_code_of(status: std::process::ExitStatus) -> i32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status
+            .code()
+            .unwrap_or_else(|| status.signal().map_or(1, |signal| 128 + signal))
+    }
+    #[cfg(not(unix))]
+    {
+        status.code().unwrap_or(1)
+    }
+}
+
 /// 对应 `NodeTextLineReader`。
 struct NodeTextLineReader {
     file: std::fs::File,
@@ -627,6 +642,13 @@ impl FileSystem for NodeExecutionEnv {
         {
             return Err(aborted(Some(&resolved)).expect("aborted"));
         }
+        // noFollow：打开前检查最终组件是否为符号链接（对应上游 O_NOFOLLOW 的 ELOOP/EMLINK 报告）。
+        if no_follow == Some(true)
+            && let Ok(link_metadata) = std::fs::symlink_metadata(&resolved)
+            && link_metadata.file_type().is_symlink()
+        {
+            return Err(symlink_refused(&resolved));
+        }
         let file = std::fs::File::open(&resolved)
             .map_err(|error| to_file_error(error, Some(&resolved)))?;
         let metadata = file
@@ -642,9 +664,6 @@ impl FileSystem for NodeExecutionEnv {
             } else {
                 FileError::new(FileErrorCode::Invalid, "Not a regular file", Some(resolved))
             });
-        }
-        if no_follow == Some(true) && metadata.is_symlink() {
-            return Err(symlink_refused(&resolved));
         }
         if context
             .abort_signal()
@@ -1129,6 +1148,7 @@ impl Shell for NodeExecutionEnv {
                                     Ok(0) => {}
                                     Ok(n) => {
                                         let text = stderr_decoder.decode(Some(&stderr_buf[..n]));
+                                        collected.extend_from_slice(&stderr_buf[..n]);
                                         seen_bytes += n;
                                         seen_newlines += stderr_buf[..n].iter().filter(|&&b| b == b'\n').count();
                                         emit(text, ShellOutputStream::Stderr, None);
@@ -1227,18 +1247,24 @@ impl Shell for NodeExecutionEnv {
         }
 
         if timed_out {
-            return Err(ExecutionError::new(
-                ExecutionErrorCode::Timeout,
-                format!("timeout:{}", options.timeout.unwrap_or(0.0)),
-            ));
+            return Err(ExecutionError {
+                code: ExecutionErrorCode::Timeout,
+                message: format!("timeout:{}", options.timeout.unwrap_or(0.0)),
+                spill_path: spill_path.clone(),
+            });
         }
         if let Some(signal) = &signal
             && signal.aborted()
         {
-            return Err(ExecutionError::new(ExecutionErrorCode::Aborted, "aborted"));
+            return Err(ExecutionError {
+                code: ExecutionErrorCode::Aborted,
+                message: "aborted".to_string(),
+                spill_path: spill_path.clone(),
+            });
         }
+        // 对应上游：进程被信号终止时退出码为 128 + 信号编号（避免把 OOM 等误认为成功退出）。
         let exit_code = match status {
-            Ok(status) => status.code().unwrap_or(1),
+            Ok(status) => exit_code_of(status),
             Err(_) => 1,
         };
         Ok(ShellExecResult {

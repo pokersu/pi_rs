@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value as JsonValue;
 
+use super::resolve_document_copies;
 use crate::chord::context::Context;
 use crate::errors::StorageRejected;
 use crate::storage::scan::{ScanStart, page, scan_start};
@@ -190,6 +191,12 @@ impl SqliteStorage {
     ) -> Result<(), StorageError> {
         let transaction = connection.transaction().map_err(sqlite_error)?;
 
+        // 展开 document.copy（物化源 → create；校验源本批未改、源可读、记录一致）。
+        let resolved = resolve_document_copies(writes, |id, at| {
+            materialize_stored_document(&transaction, id, at)
+        })?;
+        let writes = resolved.as_slice();
+
         // 全局 ID 归属：与 memory 后端同一套规则（不可变创建跨表唯一，task/submission 同表可更新）。
         let mut claimed: BTreeMap<u64, &'static str> = BTreeMap::new();
         for write in writes {
@@ -287,11 +294,8 @@ impl SqliteStorage {
                     record.retired_at = Some(seq);
                     insert_document(&transaction, &record, &revisions)?;
                 }
-                StorageWrite::DocumentCopy { record, .. } => {
-                    return Err(StorageError::Message(format!(
-                        "document.copy {} must be resolved to document.create before commit",
-                        record.id
-                    )));
+                StorageWrite::DocumentCopy { .. } => {
+                    unreachable!("document.copy is resolved to document.create before apply")
                 }
             }
         }
@@ -548,6 +552,38 @@ fn materialize_document(
     }
 }
 
+/// 物化一个文档化身到选定点（对应上游 `document(id, at)` 的存储侧物化）。
+///
+/// 与 [`materialize_document`] 的区别：源不存在时返回 `Ok(None)`（而非错误），
+/// 供 [`resolve_document_copies`] 把「源不可读」统一映射为「copy 被拒绝」。
+fn materialize_stored_document(
+    connection: &Connection,
+    id: DocumentId,
+    at: DocumentPoint,
+) -> Result<Option<StoredDocument>, StorageError> {
+    let row: Option<(String, String)> = connection
+        .query_row(
+            "SELECT record, revisions FROM documents WHERE id = ?1",
+            params![id.get()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(sqlite_error)?;
+    let Some((record_data, revisions_data)) = row else {
+        return Ok(None);
+    };
+    let record: DocumentRecord = serde_json::from_str(&record_data).map_err(json_error)?;
+    let revisions: Vec<StoredRevision> =
+        serde_json::from_str(&revisions_data).map_err(json_error)?;
+    let materialized = materialize_document(&record, &revisions, at)?;
+    Ok(materialized.map(|(value, version, deltas)| StoredDocument {
+        record,
+        version,
+        value,
+        deltas_since_base: deltas,
+    }))
+}
+
 #[async_trait::async_trait]
 impl Storage for SqliteStorage {
     async fn commit(
@@ -620,7 +656,7 @@ impl Storage for SqliteStorage {
                     |record| {
                         query
                             .owner_conversation_id
-                            .is_none_or(|id| record.parent.is_some_and(|p| p.conversation_id == id))
+                            .is_none_or(|id| record.owner.is_some_and(|o| o.conversation_id == id))
                             && query
                                 .owner_task_id
                                 .is_none_or(|id| record.owner.is_some_and(|o| o.task_id == id))

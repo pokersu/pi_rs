@@ -937,8 +937,12 @@ impl StreamState {
         };
     }
 
-    fn finalize_stop_reason(&mut self, status: Option<&str>, incomplete_reason: Option<&str>) {
-        let (stop_reason, error_message) = map_stop_reason(status, incomplete_reason);
+    fn finalize_stop_reason(
+        &mut self,
+        status: Option<&str>,
+        incomplete_reason: Option<&str>,
+    ) -> Result<(), String> {
+        let (stop_reason, error_message) = map_stop_reason(status, incomplete_reason)?;
         self.output.stop_reason = stop_reason;
         self.output.error_message = error_message;
         self.output.raw_stop_reason = status.map(|s| s.to_string());
@@ -952,22 +956,23 @@ impl StreamState {
         {
             self.output.stop_reason = StopReason::ToolUse;
         }
+        Ok(())
     }
 }
 
-/// 对应 `mapStopReason`。
+/// 对应 `mapStopReason`。未知 status 对应 TS 的穷尽检查抛错。
 fn map_stop_reason(
     status: Option<&str>,
     incomplete_reason: Option<&str>,
-) -> (StopReason, Option<String>) {
+) -> Result<(StopReason, Option<String>), String> {
     match status {
-        None => (StopReason::Stop, None),
-        Some("completed") => (StopReason::Stop, None),
+        None => Ok((StopReason::Stop, None)),
+        Some("completed") => Ok((StopReason::Stop, None)),
         Some("incomplete") => {
             if incomplete_reason == Some("max_output_tokens") {
-                (StopReason::Length, None)
+                Ok((StopReason::Length, None))
             } else {
-                (
+                Ok((
                     StopReason::Error,
                     Some(
                         incomplete_reason
@@ -976,12 +981,12 @@ fn map_stop_reason(
                                 "Response incomplete without a provider reason".to_string()
                             }),
                     ),
-                )
+                ))
             }
         }
-        Some("failed") | Some("cancelled") => (StopReason::Error, None),
-        Some("in_progress") | Some("queued") => (StopReason::Stop, None),
-        _ => (StopReason::Stop, None),
+        Some("failed") | Some("cancelled") => Ok((StopReason::Error, None)),
+        Some("in_progress") | Some("queued") => Ok((StopReason::Stop, None)),
+        Some(other) => Err(format!("Unhandled stop reason: {other}")),
     }
 }
 
@@ -1074,12 +1079,43 @@ async fn stream_request(
         return Err("OpenAI Responses stream ended before a terminal response event".to_string());
     }
 
+    // 对应上游：pending/aborted/error 抛错走 error 事件，而非静默当 stop。
+    match state.output.stop_reason {
+        StopReason::Pending => {
+            return Err("OpenAI Responses stream ended without a stop reason".to_string());
+        }
+        StopReason::Aborted | StopReason::Error => {
+            let msg = state
+                .output
+                .error_message
+                .clone()
+                .unwrap_or_else(|| "An unknown error occurred".to_string());
+            return Err(msg);
+        }
+        _ => {}
+    }
+
+    // 对应上游：toolUse 时拒绝未完成 tool call（output_item.done 未到，参数可能被截断/串台）。
+    if state.output.stop_reason == StopReason::ToolUse {
+        for slot in state.slots.values() {
+            if let Slot::ToolCall { content_index, .. } = slot
+                && let ContentBlock::ToolCall(block) = &state.output.content[*content_index]
+            {
+                return Err(format!(
+                    "OpenAI Responses stream completed with an unfinished tool call: {} ({})",
+                    block.name, block.id
+                ));
+            }
+        }
+    }
+
     let reason = match state.output.stop_reason {
         StopReason::Stop => TerminalStopReason::Stop,
         StopReason::Length => TerminalStopReason::Length,
         StopReason::ToolUse => TerminalStopReason::ToolUse,
         StopReason::Deferred => TerminalStopReason::Deferred,
-        _ => TerminalStopReason::Stop,
+        // pending/aborted/error 已在上方返回错误，其余变体不可达。
+        _ => unreachable!(),
     };
     stream.push(AssistantMessageEvent::Done {
         reason,
@@ -1347,7 +1383,7 @@ async fn process_event(
                 .and_then(|v| v.as_str())
                 .or(state.service_tier.as_deref());
             apply_service_tier_pricing(&mut state.output.usage, service_tier, &state.output.model);
-            state.finalize_stop_reason(status, incomplete_reason);
+            state.finalize_stop_reason(status, incomplete_reason)?;
             state.saw_terminal = true;
         }
         "response.failed" => {

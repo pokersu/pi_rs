@@ -882,6 +882,7 @@ impl Transaction {
         self.assert_task_documents_open(&resolved)?;
 
         // 已有本事务内的最新化身：复用草稿；若是分叉拷贝则读取其源。
+        let mut skip_load = false;
         let latest = {
             let state = self.state.lock().expect("tx");
             state
@@ -899,11 +900,12 @@ impl Transaction {
                     })
                 })
         };
-        if let Some((index, false, draft, is_fork)) = latest {
-            if let Some(draft) = draft {
+        if let Some((index, retire_on_commit, draft, is_fork)) = latest {
+            if retire_on_commit {
+                skip_load = true;
+            } else if let Some(draft) = draft {
                 return Ok(draft);
-            }
-            if is_fork {
+            } else if is_fork {
                 return self
                     .acquire_fork_copy(index, definition)
                     .await
@@ -931,7 +933,9 @@ impl Transaction {
             state.documents.push(entry);
             index
         };
-        self.acquire(index, seed).await.map_err(doc_error)
+        self.acquire(index, seed, skip_load)
+            .await
+            .map_err(doc_error)
     }
 
     /// 对应 `retireDoc(token, ...)`。
@@ -944,7 +948,7 @@ impl Transaction {
         let definition = Arc::clone(token.definition());
         let resolved = resolve_address(definition.as_ref(), access.owner, access.key)?;
 
-        let (draft, is_fork_copy) = {
+        let (draft, fork_copy_record) = {
             let state = self.state.lock().expect("tx");
             match state
                 .latest_document_by_address
@@ -954,12 +958,23 @@ impl Transaction {
                 Some(entry) if entry.retire_on_commit => return Ok(()),
                 Some(entry) => (
                     entry.draft.clone(),
-                    matches!(entry.target, Some(DocumentTarget::ForkCopy { .. })),
+                    match &entry.target {
+                        Some(DocumentTarget::ForkCopy { record, .. }) => Some(record.clone()),
+                        _ => None,
+                    },
                 ),
-                None => (None, false),
+                None => (None, None),
             }
         };
-        if is_fork_copy {
+        if let Some(record) = fork_copy_record {
+            // 对应上游 retireDoc 的 fork-copy 分支：校验 record scope 后置 retire 标记。
+            check_record_scope(definition.as_ref(), &record)?;
+            let mut state = self.state.lock().expect("tx");
+            if let Some(index) = state.latest_document_by_address.get(&resolved.id).copied()
+                && let Some(entry) = state.documents.get_mut(index)
+            {
+                entry.retire_on_commit = true;
+            }
             return Ok(());
         }
         if let Some(draft) = draft {
@@ -1051,7 +1066,12 @@ impl Transaction {
         Ok(draft)
     }
 
-    async fn acquire(&self, index: usize, seed: Option<JsonValue>) -> Result<Draft, SessionError> {
+    async fn acquire(
+        &self,
+        index: usize,
+        seed: Option<JsonValue>,
+        skip_load: bool,
+    ) -> Result<Draft, SessionError> {
         let (definition, address_id, address) = {
             let state = self.state.lock().expect("tx");
             let entry = &state.documents[index];
@@ -1061,10 +1081,14 @@ impl Transaction {
                 entry.address.clone(),
             )
         };
-        let loaded = self
-            .host()
-            .load(&definition, &address_id, &address, self.context())
-            .await?;
+        // 对应上游 `#acquire(entry, seed, skipLoad)`：旧化身退役中时跳过从存储加载旧值。
+        let loaded = if skip_load {
+            None
+        } else {
+            self.host()
+                .load(&definition, &address_id, &address, self.context())
+                .await?
+        };
         self.assert_open()?;
         if let Some(loaded) = loaded {
             check_record_scope(definition.as_ref(), &loaded.record).map_err(SessionError::Doc)?;

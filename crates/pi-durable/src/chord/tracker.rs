@@ -17,7 +17,7 @@
 
 use serde_json::Value as JsonValue;
 
-use super::delta::{DeltaError, Op, Path, apply_in_place};
+use super::delta::{DeltaError, Op, Path, PathSegment, apply_in_place};
 
 /// 对应 `MAX_DELTA_OPERATIONS`：超过则退化为整值替换。
 pub const MAX_DELTA_OPERATIONS: usize = 4_096;
@@ -74,6 +74,22 @@ pub struct Change {
     settled: bool,
 }
 
+/// 读取 JSON 值在 path 处的当前值（不存在返回 None）。
+fn get_at_path<'a>(root: &'a JsonValue, path: &[PathSegment]) -> Option<&'a JsonValue> {
+    let mut current = root;
+    for segment in path {
+        current = match segment {
+            PathSegment::Key(key) => current.as_object()?.get(key)?,
+            PathSegment::Index(index) => current.as_array()?.get(*index)?,
+        };
+    }
+    Some(current)
+}
+
+fn is_container(value: &JsonValue) -> bool {
+    value.is_object() || value.is_array()
+}
+
 impl Change {
     fn record(&mut self, op: Op) -> Result<(), DeltaError> {
         if self.settled {
@@ -101,6 +117,18 @@ impl Change {
 
     /// 对应上游 `state[key] = value`（含末段为数组下标的形态）。
     pub fn set(&mut self, path: Path, value: JsonValue) -> Result<(), DeltaError> {
+        // 对应上游 `emitChangedValue` 的相同值抑制：
+        // 非容器严格相等，或两个容器深度相等 → 不记录 op（也不发布）。
+        if let Some(before) = get_at_path(&self.current, &path) {
+            let noop = if is_container(&value) {
+                is_container(before) && before == &value
+            } else {
+                before == &value
+            };
+            if noop {
+                return Ok(());
+            }
+        }
         self.record(Op::Set(path, value))
     }
 

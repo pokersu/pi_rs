@@ -10,7 +10,7 @@ use crate::auth::types::{
     AuthOperationOptions, Credential, CredentialInfo, CredentialModifyFn, CredentialStore,
 };
 use crate::types::AbortSignal;
-use crate::utils::abort::{BoxError, operation_signal, race_with_abort_signal};
+use crate::utils::abort::{BoxError, abort_reason, operation_signal};
 
 struct Inner {
     credentials: Mutex<BTreeMap<String, Credential>>,
@@ -40,6 +40,9 @@ impl InMemoryCredentialStore {
     }
 
     /// 对应 `enqueue`：按 provider id 串行化任务，活动工作完成前不释放链。
+    ///
+    /// 对应 TS：signal abort 只停止等待，排队中的 operation 继续在后台执行
+    /// （TS 的 queued promise 无法取消，最终 task 仍会执行并持久化）。
     async fn enqueue<T, F, Fut>(
         &self,
         provider_id: &str,
@@ -47,8 +50,9 @@ impl InMemoryCredentialStore {
         task: F,
     ) -> Result<T, BoxError>
     where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<T, BoxError>>,
+        T: Send + 'static,
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, BoxError>> + Send + 'static,
     {
         let lock = {
             let mut chains = self.inner.chains.lock().await;
@@ -57,14 +61,22 @@ impl InMemoryCredentialStore {
                 .or_insert_with(|| Arc::new(Mutex::new(())))
                 .clone()
         };
+        let signal_for_task = signal.clone();
         let operation = async move {
             let _guard = lock.lock().await;
-            signal
+            signal_for_task
                 .throw_if_aborted()
                 .map_err(|e| Box::new(e) as BoxError)?;
             task().await
         };
-        race_with_abort_signal(operation, signal).await
+        let handle = tokio::spawn(operation);
+        tokio::select! {
+            _ = signal.cancelled() => Err(Box::new(abort_reason(signal))),
+            result = handle => match result {
+                Ok(result) => result,
+                Err(error) => Err(Box::new(error)),
+            },
+        }
     }
 }
 

@@ -8,8 +8,9 @@ use pi_durable::env::{FileSystem, InMemoryFileSystem};
 use pi_durable::storage::JsonlStorage;
 use pi_durable::types::{
     ConversationFork, ConversationHistory, ConversationId, ConversationRecord, DocumentBase,
-    DocumentContent, DocumentCreate, DocumentId, DocumentPoint, DocumentScope, EntryId,
-    EntryRecord, JsonObject, Storage, StorageWrite, TaskId, TaskOutcome, TaskRecord, TaskState,
+    DocumentContent, DocumentCopySource, DocumentCreate, DocumentId, DocumentPoint, DocumentScope,
+    EntryId, EntryRecord, JsonObject, Storage, StorageWrite, TaskId, TaskOutcome, TaskRecord,
+    TaskState,
 };
 use serde_json::json;
 
@@ -71,6 +72,19 @@ fn task(
 
 fn fs() -> Arc<dyn FileSystem> {
     Arc::new(InMemoryFileSystem::new())
+}
+
+fn conversation_doc_record(id: u64, conversation_id: u64) -> DocumentCreate {
+    DocumentCreate {
+        id: DocumentId::new(id),
+        kind: "demo.session".to_string(),
+        key: None,
+        history: Some(ConversationHistory::Rewindable),
+        fork: Some(ConversationFork::Current),
+        scope: DocumentScope::Conversation {
+            conversation_id: ConversationId::new(conversation_id),
+        },
+    }
 }
 
 #[tokio::test]
@@ -415,4 +429,63 @@ async fn document_reads_retain_each_point_in_time_value_after_reopen() {
         .unwrap()
         .expect("delta 点应可读");
     assert_eq!(at_delta.value.get("count"), Some(&json!(5)));
+}
+
+#[tokio::test]
+async fn document_copy_materializes_source_after_reopen() {
+    let file_system = fs();
+    let mut value = JsonObject::new();
+    value.insert("count".to_string(), json!(9));
+
+    {
+        let storage = JsonlStorage::open(
+            Arc::clone(&file_system),
+            "/sessions",
+            Default::default(),
+            context(),
+        )
+        .await
+        .unwrap();
+        storage
+            .commit(
+                &[StorageWrite::DocumentCreate {
+                    record: conversation_doc_record(1, 10),
+                    content: DocumentBase {
+                        version: 1,
+                        value: value.clone(),
+                    },
+                }],
+                context(),
+            )
+            .await
+            .unwrap();
+        storage
+            .commit(
+                &[StorageWrite::DocumentCopy {
+                    record: conversation_doc_record(2, 11),
+                    source: DocumentCopySource {
+                        id: DocumentId::new(1),
+                        at: DocumentPoint::Current,
+                    },
+                }],
+                context(),
+            )
+            .await
+            .unwrap();
+    }
+
+    let reopened = JsonlStorage::open(
+        Arc::clone(&file_system),
+        "/sessions",
+        Default::default(),
+        context(),
+    )
+    .await
+    .unwrap();
+    let stored = reopened
+        .document(DocumentId::new(2), DocumentPoint::Current, context())
+        .await
+        .unwrap()
+        .expect("copied document");
+    assert_eq!(stored.value.get("count"), Some(&json!(9)));
 }

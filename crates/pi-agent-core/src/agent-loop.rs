@@ -245,24 +245,34 @@ fn declare_tool_changes(
     result
 }
 
+/// 对应 `createMutableAgentState` 的 seed：若 `messages` 首条非 system，则把 `systemPrompt`/`tools`
+/// 折叠成首条 system 消息。
+fn seed_leading_system_message(
+    messages: &mut Vec<AgentMessage>,
+    system_prompt: &str,
+    tools: &[Tool],
+) {
+    if matches!(messages.first(), Some(AgentMessage::System(_))) {
+        return;
+    }
+    let system_prompt = if system_prompt.is_empty() {
+        None
+    } else {
+        Some(system_prompt)
+    };
+    if let Some(initial) = create_initial_system_message(system_prompt, Some(tools)) {
+        messages.insert(0, AgentMessage::System(initial));
+    }
+}
+
 /// 把 `context.system_prompt` / `context.tools` 折叠成首条 system 消息。
 ///
 /// 对应上游在 agent 层表达的 `createInitialSystemMessage` + `normalizeContext`：
 /// 折叠后 `system_prompt` 置空，使 provider 侧不会重复生成首条 system 消息。
 fn fold_initial_system_message(context: &mut AgentContext) {
-    if matches!(context.messages.first(), Some(AgentMessage::System(_))) {
-        return;
-    }
     let tools = executable_tools(context);
-    let system_prompt = if context.system_prompt.is_empty() {
-        None
-    } else {
-        Some(context.system_prompt.as_str())
-    };
-    let Some(initial) = create_initial_system_message(system_prompt, Some(&tools)) else {
-        return;
-    };
-    context.messages.insert(0, AgentMessage::System(initial));
+    let system_prompt = context.system_prompt.clone();
+    seed_leading_system_message(&mut context.messages, &system_prompt, &tools);
     context.system_prompt.clear();
 }
 
@@ -275,24 +285,30 @@ pub async fn run_agent_loop(
     emit: AgentEventSink,
     stream_fn: StreamFn,
 ) -> Vec<AgentMessage> {
-    let mut new_messages: Vec<AgentMessage> = prompts.clone();
+    // 对应 `createMutableAgentState`：把 systemPrompt/tools seed 成首条 system 消息。
+    let tools = executable_tools(&context);
+    let mut seeded = context.messages.clone();
+    seed_leading_system_message(&mut seeded, &context.system_prompt, &tools);
+
+    // 对应 `runAgentLoop` 的 `declareToolChanges`：声明工具装载变化（可能插入 system 消息）。
+    let initial_messages = declare_tool_changes(&tools, &seeded, prompts);
+
+    let mut new_messages: Vec<AgentMessage> = initial_messages.clone();
     let mut current_context = AgentContext {
-        system_prompt: context.system_prompt.clone(),
-        messages: [context.messages.clone(), prompts.clone()].concat(),
+        system_prompt: String::new(),
+        messages: [seeded, initial_messages].concat(),
         tools: context.tools.clone(),
     };
-    // 把 systemPrompt/tools 折叠进 transcript（首条 system 消息）。
-    fold_initial_system_message(&mut current_context);
 
     emit(AgentEvent::AgentStart).await;
     emit(AgentEvent::TurnStart).await;
-    for prompt in &prompts {
+    for message in &new_messages {
         emit(AgentEvent::MessageStart {
-            message: prompt.clone(),
+            message: message.clone(),
         })
         .await;
         emit(AgentEvent::MessageEnd {
-            message: prompt.clone(),
+            message: message.clone(),
         })
         .await;
     }
@@ -327,6 +343,10 @@ pub async fn run_agent_loop_continue(
     let mut new_messages: Vec<AgentMessage> = Vec::new();
     let mut current_context = context;
 
+    // 对应上游：continue 时 systemPrompt/tools 也已在首条 system 消息里（与 runAgentLoop 一致），
+    // 因此先折叠，避免后续 llm_context 里 tools 字段触发重复的 system 消息。
+    fold_initial_system_message(&mut current_context);
+
     emit(AgentEvent::AgentStart).await;
     emit(AgentEvent::TurnStart).await;
 
@@ -352,7 +372,13 @@ async fn run_loop(
     stream_fn: StreamFn,
 ) {
     let mut last_completed_turn: Option<AgentTurnContext> = None;
-    let mut pending_messages: Vec<AgentMessage> = Vec::new();
+    // 起始即轮询一次 steering（对应上游「用户可能在等待时输入了内容」）。
+    let mut pending_messages: Vec<AgentMessage> = match &config.get_steering_messages {
+        Some(f) => f().await,
+        None => Vec::new(),
+    };
+    // 对应上游 `explicitContinuation`：finishTurn 请求的空上下文 turn 标志。
+    let mut explicit_continuation = false;
 
     // 外层循环：agent 本应停止时，若出现 follow-up 消息则继续。
     loop {
@@ -360,6 +386,8 @@ async fn run_loop(
 
         // 内层循环：处理 tool calls 与 steering 消息。
         while has_more_tool_calls || !pending_messages.is_empty() {
+            // prepareNextTurn 返回的追加消息（对应上游 `preparedMessages`）。
+            let mut prepared_messages: Vec<AgentMessage> = Vec::new();
             if let Some(turn) = &last_completed_turn {
                 let next_turn_snapshot = match &config.prepare_next_turn {
                     Some(f) => f(turn).await,
@@ -375,6 +403,9 @@ async fn run_loop(
                     if let Some(level) = snapshot.thinking_level {
                         config.stream.reasoning = crate::types::to_ai_thinking_level(level);
                     }
+                    if let Some(messages) = snapshot.messages {
+                        prepared_messages = messages;
+                    }
                 }
                 // prepareNextTurn 可能长运行（例如 compaction），期间排队的 steering 消息也要拾取。
                 if pending_messages.is_empty() {
@@ -386,9 +417,10 @@ async fn run_loop(
                 emit(AgentEvent::TurnStart).await;
             }
 
-            // 注入 pending 消息（先声明工具装载变化）。
-            if !pending_messages.is_empty() {
-                let drained: Vec<AgentMessage> = std::mem::take(&mut pending_messages);
+            // 注入 prepared + pending 消息（先声明工具装载变化）。
+            if !prepared_messages.is_empty() || !pending_messages.is_empty() {
+                let mut drained: Vec<AgentMessage> = std::mem::take(&mut prepared_messages);
+                drained.append(&mut pending_messages);
                 let executable = executable_tools(current_context);
                 let declared =
                     declare_tool_changes(&executable, &current_context.messages, drained);
@@ -440,6 +472,15 @@ async fn run_loop(
             if message.stop_reason == StopReason::Error
                 || message.stop_reason == StopReason::Aborted
             {
+                last_completed_turn = Some(AgentTurnContext {
+                    message: message.clone(),
+                    tool_results: Vec::new(),
+                    context: current_context.clone(),
+                    new_messages: new_messages.clone(),
+                });
+                if let (Some(finish), Some(turn)) = (&config.finish_turn, &last_completed_turn) {
+                    finish(turn, signal.clone()).await;
+                }
                 emit(AgentEvent::TurnEnd {
                     message: AgentMessage::Assistant(message.clone()),
                     tool_results: Vec::new(),
@@ -510,10 +551,9 @@ async fn run_loop(
                     .await;
                     return;
                 }
-                // 确保再进行一次 provider 请求（工具结果/steering/follow-up 可满足它；
-                // 否则用当前上下文再发一次）。
+                // 确保再进行一次 provider 请求：先等内层循环自然结束，再在外层履行（见下）。
                 Some(AgentTurnDecision::Continue) => {
-                    has_more_tool_calls = true;
+                    explicit_continuation = true;
                 }
                 None => {}
             }
@@ -522,6 +562,10 @@ async fn run_loop(
                 Some(f) => f().await,
                 None => Vec::new(),
             };
+            // 对应上游：若有工具结果或 steering 消息驱动下一次请求，则不再需要显式 continuation。
+            if has_more_tool_calls || !pending_messages.is_empty() {
+                explicit_continuation = false;
+            }
         }
 
         // agent 本应停止，检查 follow-up 消息。
@@ -530,7 +574,14 @@ async fn run_loop(
             None => Vec::new(),
         };
         if !follow_up.is_empty() {
+            explicit_continuation = false;
             pending_messages = follow_up;
+            continue;
+        }
+
+        // 没有自然请求，用一次仅上下文的 turn 履行 continuation 决策。
+        if explicit_continuation {
+            explicit_continuation = false;
             continue;
         }
 
@@ -560,25 +611,21 @@ async fn stream_assistant_response(
     // 转换为 LLM 兼容消息（AgentMessage[] → Message[]）。
     let llm_messages = (config.convert_to_llm)(messages);
 
-    // 构造 LLM 上下文。
+    // 构造 LLM 上下文：systemPrompt/tools 已在 fold_initial_system_message 阶段折进 messages
+    // 的首条 system 消息，因此这里对齐上游 `normalizeContext({ messages })`，不再传 tools
+    //（否则 pi-ai 的 normalize_context 会再前置一条重复的工具声明 system 消息）。
     let llm_context = Context {
-        system_prompt: if context.system_prompt.is_empty() {
-            None
-        } else {
-            Some(context.system_prompt.clone())
-        },
+        system_prompt: None,
         messages: llm_messages,
-        tools: context
-            .tools
-            .as_ref()
-            .map(|tools| tools.iter().map(|t| t.tool.clone()).collect()),
+        tools: None,
     };
 
     // 解析 API key（对会过期的 token 很重要）。
     let resolved_api_key = match &config.get_api_key {
         Some(f) => f(&config.model.provider).await,
         None => None,
-    };
+    }
+    .or(config.stream.stream.request.api_key.clone());
 
     let mut options = config.stream.clone();
     options.stream.request.api_key = resolved_api_key;
@@ -627,7 +674,10 @@ async fn stream_assistant_response(
                 }
             }
             AssistantMessageEvent::Done { .. } | AssistantMessageEvent::Error { .. } => {
-                let final_message = response.result().await;
+                // 对应上游：result() 已在流结束时附加 `thinkingLevel`，先写 thinking_level
+                // 再写回 context.messages 与 message_end 事件。
+                let mut final_message = response.result().await;
+                final_message.thinking_level = config.stream.reasoning;
                 if added_partial {
                     if let Some(last) = context.messages.last_mut() {
                         *last = AgentMessage::Assistant(final_message.clone());
@@ -645,15 +695,13 @@ async fn stream_assistant_response(
                     message: AgentMessage::Assistant(final_message.clone()),
                 })
                 .await;
-                // 对应上游在流结果上附加 `thinkingLevel: config.reasoning ?? "off"`。
-                let mut final_message = final_message;
-                final_message.thinking_level = config.stream.reasoning;
                 return final_message;
             }
         }
     }
 
-    let final_message = response.result().await;
+    let mut final_message = response.result().await;
+    final_message.thinking_level = config.stream.reasoning;
     if added_partial {
         if let Some(last) = context.messages.last_mut() {
             *last = AgentMessage::Assistant(final_message.clone());
@@ -671,8 +719,6 @@ async fn stream_assistant_response(
         message: AgentMessage::Assistant(final_message.clone()),
     })
     .await;
-    let mut final_message = final_message;
-    final_message.thinking_level = config.stream.reasoning;
     final_message
 }
 
@@ -787,6 +833,7 @@ async fn execute_tool_calls_sequential(
             signal,
         )
         .await;
+        let original_arguments = tool_call.arguments.clone();
         let finalized = match preparation {
             PreparedToolCall::Immediate { result, is_error } => FinalizedToolCallOutcome {
                 tool_call: tool_call.clone(),
@@ -799,8 +846,15 @@ async fn execute_tool_calls_sequential(
                 tool,
                 args,
             } => {
-                let executed =
-                    execute_prepared_tool_call(&tool_call, &tool, &args, signal, emit).await;
+                let executed = execute_prepared_tool_call(
+                    &tool_call,
+                    &tool,
+                    &args,
+                    &original_arguments,
+                    signal,
+                    emit,
+                )
+                .await;
                 finalize_executed_tool_call(
                     current_context,
                     assistant_message,
@@ -860,6 +914,7 @@ async fn execute_tool_calls_parallel(
             signal,
         )
         .await;
+        let original_arguments = tool_call.arguments.clone();
         let fut: BoxFuture = match preparation {
             PreparedToolCall::Immediate { result, is_error } => {
                 let finalized = FinalizedToolCallOutcome {
@@ -881,6 +936,7 @@ async fn execute_tool_calls_parallel(
                 let hooks = Arc::clone(&hooks);
                 let signal = signal.cloned();
                 let emit = emit.clone();
+                let original_arguments = original_arguments.clone();
                 Box::pin(async move {
                     if signal.as_ref().map(|s| s.aborted()).unwrap_or(false) {
                         let finalized = FinalizedToolCallOutcome {
@@ -896,6 +952,7 @@ async fn execute_tool_calls_parallel(
                         &tool_call,
                         &tool,
                         &args,
+                        &original_arguments,
                         signal.as_ref(),
                         &emit,
                     )
@@ -1021,9 +1078,15 @@ pub async fn run_tool_call(
                 }
                 Box::pin(async {})
             });
-            let executed =
-                execute_prepared_tool_call(&prepared, &tool, &args, options.signal.as_ref(), &sink)
-                    .await;
+            let executed = execute_prepared_tool_call(
+                &prepared,
+                &tool,
+                &args,
+                &tool_call.arguments,
+                options.signal.as_ref(),
+                &sink,
+            )
+            .await;
             finalize_executed_tool_call(
                 &context,
                 &options.assistant_message,
@@ -1134,33 +1197,38 @@ async fn execute_prepared_tool_call(
     tool_call: &ToolCall,
     tool: &AgentTool,
     args: &serde_json::Value,
+    original_arguments: &serde_json::Value,
     signal: Option<&AbortSignal>,
     emit: &AgentEventSink,
 ) -> ExecutedToolCallOutcome {
     let started_at = std::time::Instant::now();
-    let update_events: Arc<std::sync::Mutex<Vec<AgentEvent>>> =
+    let emit_tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>> =
         Arc::new(std::sync::Mutex::new(Vec::new()));
     let accepting_updates = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
     let on_update = {
-        let update_events = update_events.clone();
+        let emit_tasks = emit_tasks.clone();
         let accepting_updates = accepting_updates.clone();
         let tool_call_id = tool_call.id.clone();
         let tool_name = tool_call.name.clone();
-        let args_owned = args.clone();
+        let update_args = original_arguments.clone();
+        let emit = emit.clone();
         Some(Box::new(move |partial: AgentToolResult| {
             if !accepting_updates.load(std::sync::atomic::Ordering::Relaxed) {
                 return;
             }
-            update_events
-                .lock()
-                .unwrap()
-                .push(AgentEvent::ToolExecutionUpdate {
-                    tool_call_id: tool_call_id.clone(),
-                    tool_name: tool_name.clone(),
-                    args: args_owned.clone(),
-                    partial_result: partial.clone(),
-                });
+            let event = AgentEvent::ToolExecutionUpdate {
+                tool_call_id: tool_call_id.clone(),
+                tool_name: tool_name.clone(),
+                args: update_args.clone(),
+                partial_result: partial,
+            };
+            let emit = emit.clone();
+            // 对应上游：update 在工具执行期间即时 emit（异步推进），而非延迟到 execute 完成后。
+            let handle = tokio::spawn(async move {
+                emit(event).await;
+            });
+            emit_tasks.lock().unwrap().push(handle);
         }) as Box<dyn Fn(AgentToolResult) + Send>)
     };
 
@@ -1176,6 +1244,8 @@ async fn execute_prepared_tool_call(
         Ok(result) => result,
         Err(payload) => {
             accepting_updates.store(false, std::sync::atomic::Ordering::Relaxed);
+            // 对齐上游 catch 分支的 `Promise.all(updateEvents)`：工具 panic 时已发的 update 仍要送达。
+            drain_emit_tasks(&emit_tasks).await;
             return ExecutedToolCallOutcome {
                 result: create_error_tool_result(&panic_message(&payload)),
                 is_error: true,
@@ -1185,11 +1255,8 @@ async fn execute_prepared_tool_call(
     };
     accepting_updates.store(false, std::sync::atomic::Ordering::Relaxed);
 
-    // 冲刷 update 事件。
-    let events = update_events.lock().unwrap().clone();
-    for event in events {
-        emit(event).await;
-    }
+    // 冲刷已排队的 update emit 任务。
+    drain_emit_tasks(&emit_tasks).await;
 
     // 对齐上游 `isError: result.isError === true`。
     let is_error = result.is_error;
@@ -1197,6 +1264,14 @@ async fn execute_prepared_tool_call(
         result,
         is_error,
         duration_ms: started_at.elapsed().as_millis() as u64,
+    }
+}
+
+/// 等待所有已排队的 update emit 任务完成（对应上游 `Promise.all(updateEvents)`）。
+async fn drain_emit_tasks(tasks: &Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>) {
+    let handles = std::mem::take(&mut *tasks.lock().unwrap());
+    for handle in handles {
+        let _ = handle.await;
     }
 }
 
@@ -1276,8 +1351,9 @@ async fn emit_tool_execution_end(finalized: &FinalizedToolCallOutcome, emit: &Ag
     emit(AgentEvent::ToolExecutionEnd {
         tool_call_id: finalized.tool_call.id.clone(),
         tool_name: finalized.tool_call.name.clone(),
-        result: finalized.result.details.clone(),
+        result: finalized.result.clone(),
         is_error: finalized.is_error,
+        duration_ms: finalized.duration_ms,
     })
     .await;
 }

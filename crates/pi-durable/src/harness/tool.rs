@@ -153,6 +153,27 @@ fn error_text(error: &SessionError) -> String {
     error.to_string()
 }
 
+/// 对应 TS 的 catch 分支：构造 `tool_error` 结果 + `Tool {name} threw` failed 结算。
+fn tool_threw(call: &ToolCall, error: &SessionError) -> (ToolExecutionResult, Ending) {
+    (
+        ToolExecutionResult {
+            content: None,
+            is_error: Some(true),
+            details: None,
+            diagnostics: vec![tool_diagnostic(
+                ToolDiagnosticSeverity::Error,
+                "tool_error",
+                &error_text(error),
+            )],
+            usage: None,
+            control: None,
+        },
+        Ending::Failed {
+            message: format!("Tool {} threw", call.name),
+        },
+    )
+}
+
 /// 对应 `readCall(runtime, input, context)`：assistant 条目里 `callId` 的调用。
 async fn read_call(
     runtime: &Arc<dyn TaskRuntime>,
@@ -375,9 +396,8 @@ fn bound_content(
                 text.text = bounded.text.clone();
                 result.push(TextOrImageContent::Text(text));
             }
-            TextOrImageContent::Text(text) => {
-                result.push(TextOrImageContent::Text(text));
-            }
+            // 对应上游 `boundContent`：除 keep 外的文本项被丢弃，结果只剩一个裁剪后的文本项。
+            TextOrImageContent::Text(_) => {}
         }
     }
     (result, bounded.dropped_bytes, bounded.dropped_lines)
@@ -548,37 +568,57 @@ impl ToolTaskDefinition {
 
         let result: ToolExecutionResult;
         let mut ending = COMPLETED;
-        let started_at = Instant::now();
-        let env = runtime.env(Arc::clone(&context)).await?;
-        let tool_api: Arc<dyn ToolExecutionApi> = Arc::new(ToolApi {
-            runtime: Arc::clone(runtime),
-            call_id: call.id.clone(),
-            reported: Arc::clone(&reported),
-            progress: Arc::clone(&progress),
-            ended: Arc::clone(&ended),
-            registry: runtime.registry(),
-            env,
-            output_window: if limits.retain == Retain::Tail {
-                Some(ShellOutputWindow {
-                    max_bytes: limits.max_bytes,
-                    max_lines: limits.max_lines,
-                    min_interval_ms: runtime.settings().progress.output_interval_ms,
-                    bytes_per_second: PROGRESS_BYTES_PER_SECOND as f64,
-                })
-            } else {
-                None
-            },
-        });
-        match tool
-            .execute(
-                JsonValue::Object(args),
-                Arc::clone(&tool_api) as Arc<dyn ToolExecutionApi>,
-                Arc::clone(&context),
-            )
-            .await
-        {
-            Ok(executed) => {
-                result = executed;
+        let mut duration_ms: Option<u64> = None;
+
+        // 对应上游：env 构建在 try 内，失败也走 tool_error + failed 结算（而非 ? 传播）。
+        match runtime.env(Arc::clone(&context)).await {
+            Ok(env) => {
+                let started_at = Instant::now();
+                let tool_api: Arc<dyn ToolExecutionApi> = Arc::new(ToolApi {
+                    runtime: Arc::clone(runtime),
+                    call_id: call.id.clone(),
+                    reported: Arc::clone(&reported),
+                    progress: Arc::clone(&progress),
+                    ended: Arc::clone(&ended),
+                    registry: runtime.registry(),
+                    env,
+                    output_window: if limits.retain == Retain::Tail {
+                        Some(ShellOutputWindow {
+                            max_bytes: limits.max_bytes,
+                            max_lines: limits.max_lines,
+                            min_interval_ms: runtime.settings().progress.output_interval_ms,
+                            bytes_per_second: PROGRESS_BYTES_PER_SECOND as f64,
+                        })
+                    } else {
+                        None
+                    },
+                });
+                match tool
+                    .execute(
+                        JsonValue::Object(args),
+                        Arc::clone(&tool_api) as Arc<dyn ToolExecutionApi>,
+                        Arc::clone(&context),
+                    )
+                    .await
+                {
+                    Ok(executed) => {
+                        result = executed;
+                    }
+                    Err(error) => {
+                        if runtime.signal().aborted() {
+                            ended.store(true, Ordering::SeqCst);
+                            let pending = progress.stop().await;
+                            for waiter in pending {
+                                waiter.reject(error.clone());
+                            }
+                            return Err(error);
+                        }
+                        let (error_result, error_ending) = tool_threw(call, &error);
+                        result = error_result;
+                        ending = error_ending;
+                    }
+                }
+                duration_ms = Some(started_at.elapsed().as_millis() as u64);
             }
             Err(error) => {
                 if runtime.signal().aborted() {
@@ -589,24 +629,11 @@ impl ToolTaskDefinition {
                     }
                     return Err(error);
                 }
-                result = ToolExecutionResult {
-                    content: None,
-                    is_error: Some(true),
-                    details: None,
-                    diagnostics: vec![tool_diagnostic(
-                        ToolDiagnosticSeverity::Error,
-                        "tool_error",
-                        &error_text(&error),
-                    )],
-                    usage: None,
-                    control: None,
-                };
-                ending = Ending::Failed {
-                    message: format!("Tool {} threw", call.name),
-                };
+                let (error_result, error_ending) = tool_threw(call, &error);
+                result = error_result;
+                ending = error_ending;
             }
         }
-        let duration_ms = Some(started_at.elapsed().as_millis() as u64);
         ended.store(true, Ordering::SeqCst);
         {
             reported.lock().expect("reported").output.end();

@@ -494,8 +494,11 @@ pub struct ToolResultMessage {
     pub tool_call_id: String,
     pub tool_name: String,
     pub content: Vec<TextOrImageContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub added_tool_names: Option<Vec<String>>,
     pub is_error: bool,
     pub timestamp: u64,
@@ -865,6 +868,8 @@ pub struct ProviderRequestOptions {
     pub max_retry_delay_ms: Option<u64>,
     pub on_payload: Option<OnPayloadFn>,
     pub on_response: Option<OnResponseFn>,
+    /// 对应 `ProviderRequestOptions.env`：provider 作用域环境覆盖（优先于 process env）。
+    pub env: Option<ProviderEnv>,
 }
 
 /// 对应 `StreamOptions`

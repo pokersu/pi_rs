@@ -604,6 +604,7 @@ pub fn stream_options(settings: &ConversationStreamOptions) -> SimpleStreamOptio
                 max_retry_delay_ms: settings.max_retry_delay_ms,
                 on_payload: None,
                 on_response: None,
+                env: None,
             },
             temperature: None,
             sampling_params: None,
@@ -971,6 +972,8 @@ impl CompactionTaskDefinition {
             }),
         ];
         let mut options = stream_options(&request.stream_options);
+        // 对应上游 `const { deferred: _deferred, ...forwarded } = streamOptions`：摘要请求不带 deferred。
+        options.deferred = None;
         options.stream.cache_retention = None;
         options.stream.max_tokens = Some(request.max_tokens);
         options.stream.request.signal = Some(runtime.signal());

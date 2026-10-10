@@ -5,6 +5,7 @@
 //! refresh 失败后不做静默 env 回退。
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::auth::types::{
@@ -274,28 +275,53 @@ async fn resolve_stored_oauth(
     if expires_soon(&credential) {
         // 乐观检查判为过期；权威检查在锁下进行。
         let provider_id_owned = provider_id.to_string();
-        let signal_owned = signal.clone();
         let oauth_owned = oauth.clone();
+
+        // 对应 TS 的 lockWait：独立 signal 只用于「等待锁」阶段。调用方 signal abort
+        // 时触发它；一旦进入 modify 回调（拿到锁）就解除关联，此后 refresh 及其持久化
+        // 只受 timeout 约束，忽略调用方 signal（provider 可能已轮换 refresh token，
+        // 取消会丢弃唯一有效凭据）。
+        let lock_wait = AbortSignal::new();
+        let listening = Arc::new(AtomicBool::new(true));
+        {
+            let listening = listening.clone();
+            let signal = signal.clone();
+            let lock_wait = lock_wait.clone();
+            tokio::spawn(async move {
+                signal.cancelled().await;
+                if listening.load(Ordering::SeqCst) {
+                    lock_wait.abort();
+                }
+            });
+        }
+
+        let signal_for_check = signal.clone();
+        let listening_for_fn = listening.clone();
         let post = match credentials
             .modify(
                 provider_id,
                 Box::new(move |current: Option<Credential>| {
                     let provider_id = provider_id_owned.clone();
-                    let signal = signal_owned.clone();
                     let oauth = oauth_owned.clone();
+                    let signal_for_check = signal_for_check.clone();
+                    let listening = listening_for_fn.clone();
                     Box::pin(async move {
+                        // 进入 modify 回调（已拿到锁）：解除 signal→lockWait 关联，并
+                        // 检查一次调用方 signal（对应 TS 的 removeEventListener + throwIfAborted）。
+                        listening.store(false, Ordering::SeqCst);
+                        signal_for_check
+                            .throw_if_aborted()
+                            .map_err(|e| Box::new(e) as BoxError)?;
                         let Some(Credential::OAuth(current_oauth)) = current else {
                             return Ok(None); // 期间已登出
                         };
                         if now_ms() + minimum_validity_ms < current_oauth.expires {
                             return Ok(None); // 其他进程/请求已刷新
                         }
-                        let refresh_signal = AbortSignal::any(&[
-                            signal.clone(),
-                            AbortSignal::timeout(Duration::from_millis(
-                                DEFAULT_OAUTH_REFRESH_TIMEOUT_MS,
-                            )),
-                        ]);
+                        // 对应 TS：刷新本身只受 timeout 约束，忽略调用方 signal。
+                        let refresh_signal = AbortSignal::timeout(Duration::from_millis(
+                            DEFAULT_OAUTH_REFRESH_TIMEOUT_MS,
+                        ));
                         match oauth.refresh(&current_oauth, &refresh_signal).await {
                             Ok(credential) => Ok(Some(Credential::OAuth(credential))),
                             Err(error) => Err(Box::new(ModelsError::new(
@@ -307,7 +333,7 @@ async fn resolve_stored_oauth(
                     })
                 }),
                 Some(&AuthOperationOptions {
-                    signal: Some(signal.clone()),
+                    signal: Some(lock_wait.clone()),
                 }),
             )
             .await

@@ -8,9 +8,9 @@ use pi_durable::storage::SqliteStorage;
 use pi_durable::types::{
     ConversationFork, ConversationHistory, ConversationId, ConversationOwnership,
     ConversationQuery, ConversationRecord, DocumentAddress, DocumentBase, DocumentContent,
-    DocumentCreate, DocumentId, DocumentPoint, DocumentScope, EntryDraft, EntryId, EntryQuery,
-    EntryRecord, JsonObject, Storage, StorageError, StorageWrite, TaskOutcome, TaskRecord,
-    TaskState, TaskStatus,
+    DocumentCopySource, DocumentCreate, DocumentId, DocumentPoint, DocumentScope, EntryDraft,
+    EntryId, EntryQuery, EntryRecord, JsonObject, Storage, StorageError, StorageWrite, TaskOutcome,
+    TaskRecord, TaskState, TaskStatus,
 };
 use serde_json::json;
 
@@ -490,3 +490,57 @@ fn _ownership_exports(_: ConversationOwnership, _: ConversationHistory, _: Conve
 // 保证 `EntryDraft` 与文档查询类型可被外部构造。
 #[allow(dead_code)]
 fn _draft_shapes(_: EntryDraft, _: pi_durable::types::DocumentQuery) {}
+
+#[tokio::test]
+async fn document_copy_materializes_source_as_create() {
+    let storage = SqliteStorage::open_in_memory().unwrap();
+    let mut value = JsonObject::new();
+    value.insert("count".to_string(), json!(11));
+
+    let record = |id: u64, conversation_id: u64| DocumentCreate {
+        id: DocumentId::new(id),
+        kind: "demo.session".to_string(),
+        key: None,
+        history: Some(ConversationHistory::Rewindable),
+        fork: Some(ConversationFork::Current),
+        scope: DocumentScope::Conversation {
+            conversation_id: ConversationId::new(conversation_id),
+        },
+    };
+
+    storage
+        .commit(
+            &[StorageWrite::DocumentCreate {
+                record: record(1, 10),
+                content: DocumentBase {
+                    version: 1,
+                    value: value.clone(),
+                },
+            }],
+            context(),
+        )
+        .await
+        .unwrap();
+
+    storage
+        .commit(
+            &[StorageWrite::DocumentCopy {
+                record: record(2, 11),
+                source: DocumentCopySource {
+                    id: DocumentId::new(1),
+                    at: DocumentPoint::Current,
+                },
+            }],
+            context(),
+        )
+        .await
+        .unwrap();
+
+    let stored = storage
+        .document(DocumentId::new(2), DocumentPoint::Current, context())
+        .await
+        .unwrap()
+        .expect("copied document");
+    assert_eq!(stored.value.get("count"), Some(&json!(11)));
+    assert_eq!(stored.version, 1);
+}

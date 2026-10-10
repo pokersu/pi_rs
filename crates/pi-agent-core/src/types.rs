@@ -250,6 +250,8 @@ pub struct AgentLoopTurnUpdate {
     pub context: Option<AgentContext>,
     pub model: Option<Model>,
     pub thinking_level: Option<ThinkingLevel>,
+    /// 准备阶段追加的消息（prepareNextTurn 返回，会在下一轮注入）。
+    pub messages: Option<Vec<AgentMessage>>,
 }
 
 /// 对应 `BeforeToolCallContext`
@@ -327,8 +329,10 @@ pub enum AgentEvent {
     ToolExecutionEnd {
         tool_call_id: String,
         tool_name: String,
-        result: serde_json::Value,
+        result: AgentToolResult,
         is_error: bool,
+        /// 对应 `durationMs`：`execute()` 耗时；工具未运行时缺省。
+        duration_ms: Option<u64>,
     },
 }
 

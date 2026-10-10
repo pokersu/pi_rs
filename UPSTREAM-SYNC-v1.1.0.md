@@ -579,6 +579,31 @@ P9 之后做了一次双向（TS→Rust 缺失 + Rust→TS 多余）逐文件逐
 修正 `scan.py` 的 `declared_scope`（durable 曾被误判为 6 文件子集）。
 验证：`cargo test --workspace` 470 passed / 0 failed，`cargo fmt` 无差异。
 
+**P11 第二轮重审 + 三轮修复**〔✅ 已完成 2026-10-10〕
+
+P10 之后，重新用 11 个独立审计 agent 对全部模块做了第二轮逐方法重审（`tools.d/parity/recheck/`
+下 a1~a10、a4a、a4b 各 `report.md`），发现 P10 结论偏乐观——报告总差异约 360 项（P10 只覆盖
+符号级差异，漏掉了大量方法级/边界级差异）。随后按「运行逻辑优先」做了三轮修复，共约 38 项，
+结论见 `tools.d/parity/recheck/FINAL-REPORT.md` 与 `FIXES.md`。
+
+- **第一轮（P0/P1/P2，29 项）**：document.copy 三后端支持 + commit 原子性/可见性、
+  generation.answer() 边界启动、headers 优先级、session/env 六处、chord 相同值抑制、agent 五处。
+- **第二轮（5 处）**：llm_context 不再传 tools、工具事件流时序/载荷、compaction 剥离 deferred、
+  tool.rs bound_content + env 错误路径、applyAuth env 合并。
+- **第三轮（4 项）**：bash prepare/env/inheritEnv、PowerShell programs、read truncation 字段、
+  tools re-export。
+
+误报核实：stream_simple normalize（normalize 已在 api 层 build_body 等价实现）、
+agent afterToolCall 收到原始 toolCall（Rust 解构后传的实为 prepared.toolCall）。
+
+剩余差异：
+- **唯一「明确」剩余**：conformance 32 个测试 case（env 14 + storage 18），属测试契约覆盖缺口，
+  非运行逻辑。
+- **其余约 300 项**：加性多余 / 值等价（chord op 序列）/ 声明范围外（ai 40+ provider、OAuth、
+  图像、thinking 全链路）/ 语言机制豁免（Proxy、TypeBox→JSON schema）/ 低危边界，绝大多数无需修。
+
+验证：`cargo test --workspace` 475 passed / 0 failed，`cargo fmt` 干净，clippy 无新增告警。
+
 **对照验证方法**：P5a 起引入「用 Node 直接加载上游 TS 计算期望值」的对照测试
 （`tools.d/parity/*.mjs` + `crates/pi-durable/tests/*_parity.rs`），用于纯逻辑模块的 1:1 校验；
 后续 P5 阶段可沿用该模式。

@@ -99,6 +99,7 @@ pub fn build_base_options(
             max_retry_delay_ms: options.and_then(|o| o.stream.request.max_retry_delay_ms),
             on_payload: options.and_then(|o| o.stream.request.on_payload.clone()),
             on_response: options.and_then(|o| o.stream.request.on_response.clone()),
+            env: options.and_then(|o| o.stream.request.env.clone()),
         },
         temperature: options.and_then(|o| o.stream.temperature),
         sampling_params,

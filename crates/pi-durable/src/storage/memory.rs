@@ -15,15 +15,16 @@ use std::sync::Mutex;
 
 use serde_json::Value as JsonValue;
 
+use super::resolve_document_copies;
 use crate::chord::context::Context;
 use crate::chord::delta::{Op, apply_immutable_batches};
 use crate::errors::StorageRejected;
 use crate::storage::scan::{ScanStart, page, scan_start};
 use crate::types::{
     ConversationId, ConversationQuery, ConversationRecord, Cursor, DocumentAddress,
-    DocumentContent, DocumentId, DocumentPoint, DocumentQuery, DocumentRecord, DocumentScope,
-    EntryId, EntryQuery, EntryRecord, JsonObject, Page, ScanOrder, Seq, Storage, StorageError,
-    StorageWrite, StoredDocument, SubmissionId, SubmissionQuery, SubmissionRecord,
+    DocumentContent, DocumentCreate, DocumentId, DocumentPoint, DocumentQuery, DocumentRecord,
+    DocumentScope, EntryId, EntryQuery, EntryRecord, JsonObject, Page, ScanOrder, Seq, Storage,
+    StorageError, StorageWrite, StoredDocument, SubmissionId, SubmissionQuery, SubmissionRecord,
     SubmissionStatus, TaskId, TaskQuery, TaskRecord, TaskStatus,
 };
 
@@ -122,6 +123,20 @@ impl MemoryStorage {
     pub fn validate_writes(&self, writes: &[StorageWrite]) -> Result<(), StorageError> {
         let inner = self.inner.lock().expect("memory storage");
         validate_writes(&inner, writes)
+    }
+
+    /// 展开 `document.copy` 为 `document.create`（物化源文档为 base）。
+    ///
+    /// 供 jsonl 等「先编码后应用」的后端在写盘前调用，也供 `commit` 内部复用；
+    /// 三项校验（源本批未改 / 源可读 / 记录一致）见 [`resolve_document_copies`]。
+    pub fn resolve_document_copies(
+        &self,
+        writes: &[StorageWrite],
+    ) -> Result<Vec<StorageWrite>, StorageError> {
+        let inner = self.inner.lock().expect("memory storage");
+        resolve_document_copies(writes, |id, at| {
+            materialize_document_state(&inner.state, id, at)
+        })
     }
 
     fn assert_open(&self) -> Result<(), StorageError> {
@@ -320,13 +335,146 @@ fn validate_writes(inner: &MemoryInner, writes: &[StorageWrite]) -> Result<(), S
     Ok(())
 }
 
+/// 对应上游 `DocumentAction`：同一文档在一批提交内的 create/change/retire 组合。
+#[derive(Default)]
+struct DocumentAction {
+    create: Option<DocumentCreate>,
+    content: Option<DocumentContent>,
+    retire: bool,
+}
+
+fn content_version(content: &DocumentContent) -> u32 {
+    match content {
+        DocumentContent::Base(base) => base.version,
+        DocumentContent::Delta { version, .. } => *version,
+    }
+}
+
+/// 对应上游 `prepareDocumentActions`：聚合一批写入里每个文档的 create/change/retire。
+fn prepare_document_actions(
+    writes: &[StorageWrite],
+) -> Result<BTreeMap<u64, DocumentAction>, StorageError> {
+    let mut actions: BTreeMap<u64, DocumentAction> = BTreeMap::new();
+    for write in writes {
+        match write {
+            StorageWrite::DocumentCreate { record, content } => {
+                let action = actions.entry(record.id.get()).or_default();
+                if action.create.is_some() || action.content.is_some() {
+                    return Err(StorageError::Message(format!(
+                        "Document {} has more than one content command",
+                        record.id.get()
+                    )));
+                }
+                action.create = Some(record.clone());
+                action.content = Some(DocumentContent::Base(content.clone()));
+            }
+            StorageWrite::DocumentChange { id, content } => {
+                let action = actions.entry(id.get()).or_default();
+                if action.content.is_some() {
+                    return Err(StorageError::Message(format!(
+                        "Document {} has more than one content command",
+                        id.get()
+                    )));
+                }
+                action.content = Some(content.clone());
+            }
+            StorageWrite::DocumentRetire { id } => {
+                let action = actions.entry(id.get()).or_default();
+                if action.retire {
+                    return Err(StorageError::Message(format!(
+                        "Document {} is retired more than once",
+                        id.get()
+                    )));
+                }
+                action.retire = true;
+            }
+            _ => {}
+        }
+    }
+    Ok(actions)
+}
+
+/// 对应上游 `checkDocumentActions`：文档语义校验（在应用前执行，失败不污染任何状态）。
+fn check_document_actions(
+    state: &MemoryState,
+    actions: &BTreeMap<u64, DocumentAction>,
+) -> Result<(), StorageError> {
+    let mut live_counts: BTreeMap<String, i64> = BTreeMap::new();
+    for (id, action) in actions {
+        let existing = state.documents.get(id);
+        if action.create.is_none() && existing.is_none() {
+            return Err(StorageError::Message(format!("Unknown document: {id}")));
+        }
+        if action.create.is_some() && existing.is_some() {
+            return Err(StorageError::Message(format!(
+                "Document {id} already exists"
+            )));
+        }
+        if existing.is_some_and(|entry| entry.record.retired_at.is_some()) {
+            return Err(StorageError::Message(format!("Document {id} is retired")));
+        }
+        let previous = existing.and_then(|entry| entry.revisions.last());
+        if let Some(DocumentContent::Delta { version, .. }) = &action.content {
+            let Some(previous) = previous else {
+                return Err(StorageError::Message(format!(
+                    "Document {id} delta has no base"
+                )));
+            };
+            if content_version(&previous.content) != *version {
+                return Err(StorageError::Message(format!(
+                    "Document {id} version transition requires a base"
+                )));
+            }
+        }
+
+        // 同一地址不能有超过一个当前化身。
+        let key = match &action.create {
+            Some(create) => address_key(&create.kind, &create.scope, create.key.as_deref()),
+            None => {
+                let record = &existing.expect("checked above").record;
+                address_key(&record.kind, &record.scope, record.key.as_deref())
+            }
+        };
+        let current_id = state
+            .document_addresses
+            .get(&key)
+            .and_then(|index| index.current);
+        let live = live_counts
+            .entry(key)
+            .or_insert(if current_id.is_none() { 0 } else { 1 });
+        if action.retire && current_id == Some(DocumentId::new(*id)) {
+            *live -= 1;
+        }
+        if action.create.is_some() && !action.retire {
+            *live += 1;
+        }
+    }
+    for live in live_counts.values() {
+        if *live > 1 {
+            return Err(StorageError::Message(
+                "Document address already has a current incarnation".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn apply_writes(
     inner: &mut MemoryInner,
     writes: &[StorageWrite],
     seq: Seq,
 ) -> Result<(), StorageError> {
+    // 0) 展开 document.copy（物化源 → create；校验源本批未改、源可读、记录一致）。
+    let resolved = {
+        let state = &inner.state;
+        resolve_document_copies(writes, |id, at| materialize_document_state(state, id, at))?
+    };
+    let writes = resolved.as_slice();
+
     // 1) 校验阶段：失败不污染任何状态。
     validate_writes(inner, writes)?;
+    let document_actions = prepare_document_actions(writes)?;
+    check_document_actions(&inner.state, &document_actions)?;
 
     // 2) 登记 ID 归属（仅在校验全部通过后）。
     let claimed: BTreeMap<u64, TableName> = writes.iter().filter_map(write_identity).collect();
@@ -339,14 +487,12 @@ fn apply_writes(
         match write {
             StorageWrite::Conversation(record) => {
                 state.conversations.insert(record.id.get(), *record);
-                if let Some(parent) = record.parent {
+                if let Some(owner) = record.owner {
                     state
                         .conversation_ids_by_owner_conversation
-                        .entry(parent.conversation_id.get())
+                        .entry(owner.conversation_id.get())
                         .or_default()
                         .insert(record.id.get());
-                }
-                if let Some(owner) = record.owner {
                     state
                         .conversation_ids_by_owner_task
                         .entry(owner.task_id.get())
@@ -378,6 +524,24 @@ fn apply_writes(
             }
             StorageWrite::Submission(record) => {
                 let id = record.identity().id.get();
+                // 更新时先移除旧的 status 索引与 requestId 映射（对齐上游）。
+                if let Some(previous) = state.submissions.get(&id) {
+                    if previous.status() != record.status()
+                        && let Some(set) =
+                            state.submission_ids_by_status.get_mut(&previous.status())
+                    {
+                        set.remove(&id);
+                    }
+                    if let Some(previous_request_id) = &previous.identity().request_id {
+                        let key = (
+                            previous.identity().conversation_id.get(),
+                            previous_request_id.clone(),
+                        );
+                        if state.submission_ids_by_request.get(&key) == Some(&id) {
+                            state.submission_ids_by_request.remove(&key);
+                        }
+                    }
+                }
                 state.submissions.insert(id, record.clone());
                 state
                     .submission_ids_by_status
@@ -414,32 +578,8 @@ fn apply_writes(
                 );
                 index_document(state, &doc);
             }
-            StorageWrite::DocumentCopy { record, source } => {
-                let source_value = materialize(state, source.id, source.at)?;
-                let doc = DocumentRecord {
-                    id: record.id,
-                    kind: record.kind.clone(),
-                    key: record.key.clone(),
-                    created_at: seq,
-                    retired_at: None,
-                    history: record.history,
-                    fork: record.fork,
-                    scope: record.scope,
-                };
-                state.documents.insert(
-                    record.id.get(),
-                    StoredDocumentState {
-                        record: doc.clone(),
-                        revisions: vec![DocumentRevision {
-                            content: DocumentContent::Base(crate::types::DocumentBase {
-                                version: source_value.1,
-                                value: source_value.0,
-                            }),
-                            seq,
-                        }],
-                    },
-                );
-                index_document(state, &doc);
+            StorageWrite::DocumentCopy { .. } => {
+                unreachable!("document.copy is resolved to document.create before apply")
             }
             StorageWrite::DocumentChange { id, content } => {
                 let entry = state.documents.get_mut(&id.get()).ok_or_else(|| {
@@ -473,6 +613,11 @@ fn apply_writes(
                 }
             }
         }
+    }
+
+    // 推进 next_id（对应上游每个 record 分支的 nextId = max(nextId, id + 1)）。
+    for (id, _) in writes.iter().filter_map(write_identity) {
+        inner.next_id = inner.next_id.max(id + 1);
     }
     Ok(())
 }
@@ -563,6 +708,34 @@ fn materialize(
             "document root must stay an object".to_string(),
         )),
     }
+}
+
+/// 物化文档到选定点，含 `isCurrentOnly` / `isAliveAt` 检查（对应上游 `materializeDocument`）。
+fn materialize_document_state(
+    state: &MemoryState,
+    id: DocumentId,
+    at: DocumentPoint,
+) -> Result<Option<StoredDocument>, StorageError> {
+    let Some(stored) = state.documents.get(&id.get()) else {
+        return Ok(None);
+    };
+    // 非当前点的读取要求记录保留历史内容（对应上游 `isCurrentOnly` 检查）。
+    if !matches!(at, DocumentPoint::Current) && is_current_only(&stored.record) {
+        return Err(StorageError::Message(format!(
+            "Document {} does not retain historical content",
+            id.get()
+        )));
+    }
+    if !is_alive_at(&stored.record, at) {
+        return Ok(None);
+    }
+    let (value, version, deltas_since_base) = materialize(state, id, at)?;
+    Ok(Some(StoredDocument {
+        record: stored.record.clone(),
+        version,
+        value,
+        deltas_since_base,
+    }))
 }
 
 // ─── Storage 实现 ────────────────────────────────────────────────────────────
@@ -898,26 +1071,7 @@ impl Storage for MemoryStorage {
     ) -> Result<Option<StoredDocument>, StorageError> {
         self.assert_open()?;
         let inner = self.inner.lock().expect("memory storage");
-        let Some(stored) = inner.state.documents.get(&id.get()) else {
-            return Ok(None);
-        };
-        // 非当前点的读取要求记录保留历史内容（对应上游 `isCurrentOnly` 检查）。
-        if !matches!(at, DocumentPoint::Current) && is_current_only(&stored.record) {
-            return Err(StorageError::Message(format!(
-                "Document {} does not retain historical content",
-                id.get()
-            )));
-        }
-        if !is_alive_at(&stored.record, at) {
-            return Ok(None);
-        }
-        let (value, version, deltas_since_base) = materialize(&inner.state, id, at)?;
-        Ok(Some(StoredDocument {
-            record: stored.record.clone(),
-            version,
-            value,
-            deltas_since_base,
-        }))
+        materialize_document_state(&inner.state, id, at)
     }
 
     async fn scan_documents(

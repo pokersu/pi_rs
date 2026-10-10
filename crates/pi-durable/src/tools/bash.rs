@@ -1,7 +1,9 @@
 //! 对应 `tools/bash.ts`：通过环境 Shell 运行命令。
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 
+use futures::future::BoxFuture;
 use serde_json::{Value as JsonValue, json};
 
 use crate::chord::context::Context;
@@ -31,21 +33,47 @@ static SCHEMA: LazyLock<JsonValue> = LazyLock::new(|| {
     })
 });
 
+/// 对应 `BashPrepare`：命令执行前修改 execution（脚本/工作目录/环境）；抛错（Rust 为 Err）会中止执行。
+pub type BashPrepare = Arc<
+    dyn Fn(
+            &mut BashExecution,
+            &dyn ToolExecutionApi,
+            Arc<dyn Context>,
+        ) -> BoxFuture<'static, Result<(), SessionError>>
+        + Send
+        + Sync,
+>;
+
 /// 对应 `BashToolOptions`。
 #[derive(Clone, Default)]
 pub struct BashToolOptions {
     /// 在命令前运行的行。
     pub command_prefix: Option<String>,
+    /// 执行前的修改钩子。
+    pub prepare: Option<BashPrepare>,
+}
+
+/// 对应 `PowerShellToolOptions`。
+#[derive(Clone, Default)]
+pub struct PowerShellToolOptions {
+    /// 在命令前运行的行。
+    pub command_prefix: Option<String>,
+    /// 执行前的修改钩子。
+    pub prepare: Option<BashPrepare>,
+    /// PowerShell 程序按序尝试；默认 `pwsh` 再 `powershell`。
+    pub programs: Option<Vec<String>>,
 }
 
 struct BashTool {
     options: BashToolOptions,
 }
 
-/// 对应 `BashExecution`：一条即将运行的命令。
-struct BashExecution {
-    command: String,
-    cwd: String,
+/// 对应 `BashExecution`：一条即将运行的命令，`prepare` 可修改。
+pub struct BashExecution {
+    pub command: String,
+    pub cwd: String,
+    pub env: BTreeMap<String, String>,
+    pub inherit_env: bool,
 }
 
 fn validate_timeout(timeout: Option<f64>) -> Result<(), SessionError> {
@@ -65,18 +93,28 @@ fn validate_timeout(timeout: Option<f64>) -> Result<(), SessionError> {
     Ok(())
 }
 
-fn prepare_execution(
+/// 对应 `prepareExecution`：构造 execution（前缀 + cwd + 空 env + 继承），再跑 `prepare` 钩子。
+async fn prepare_execution(
     command: &str,
-    options: &BashToolOptions,
-    env: &dyn ExecutionEnv,
-) -> BashExecution {
-    BashExecution {
-        command: options.command_prefix.as_ref().map_or_else(
+    command_prefix: Option<&str>,
+    prepare: Option<&BashPrepare>,
+    api: &dyn ToolExecutionApi,
+    context: Arc<dyn Context>,
+) -> Result<BashExecution, SessionError> {
+    let env = require_env(api)?;
+    let mut execution = BashExecution {
+        command: command_prefix.map_or_else(
             || command.to_string(),
             |prefix| format!("{prefix}\n{command}"),
         ),
         cwd: env.cwd(),
+        env: BTreeMap::new(),
+        inherit_env: true,
+    };
+    if let Some(prepare) = prepare {
+        prepare(&mut execution, api, context).await?;
     }
+    Ok(execution)
 }
 
 /// 对应 `runCommand`：依次尝试命令形态直到有一个启动，流式输出并在非零退出/超时时报错。
@@ -96,8 +134,8 @@ async fn run_command(
                 command,
                 ShellExecOptions {
                     cwd: Some(execution.cwd.clone()),
-                    env: None,
-                    inherit_env: Some(true),
+                    env: Some(execution.env.clone()),
+                    inherit_env: Some(execution.inherit_env),
                     timeout,
                     on_output: Some(Box::new(
                         move |text: &str, _context: &dyn Context, info: &ShellOutputInfo| {
@@ -148,7 +186,8 @@ async fn run_command(
             }
             if error.code == ExecutionErrorCode::Timeout {
                 return Err(SessionError::Message(format!(
-                    "Command timed out after {timeout:?} seconds"
+                    "Command timed out after {} seconds",
+                    timeout.unwrap_or_default()
                 )));
             }
             if error.code == ExecutionErrorCode::Aborted {
@@ -200,8 +239,15 @@ impl ToolRegistration for BashTool {
         let command = args["command"].as_str().unwrap_or_default();
         let timeout = args["timeout"].as_f64();
         validate_timeout(timeout)?;
+        let execution = prepare_execution(
+            command,
+            self.options.command_prefix.as_deref(),
+            self.options.prepare.as_ref(),
+            api.as_ref(),
+            Arc::clone(&context),
+        )
+        .await?;
         let env = require_env(api.as_ref())?;
-        let execution = prepare_execution(command, &self.options, env.as_ref());
         run_command(
             vec![ShellCommand::Shell(execution.command.clone())],
             &execution,
@@ -233,12 +279,10 @@ const POWERSHELL_ARGS: [&str; 5] = [
 const UTF8_OUTPUT: &str = "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}";
 
 /// 对应 `createPowerShellTool(options?)`。
-pub fn create_powershell_tool(
-    options: Option<crate::tools::bash::BashToolOptions>,
-) -> Arc<dyn ToolRegistration> {
+pub fn create_powershell_tool(options: Option<PowerShellToolOptions>) -> Arc<dyn ToolRegistration> {
     let options = options.unwrap_or_default();
     struct PowerShellTool {
-        options: BashToolOptions,
+        options: PowerShellToolOptions,
     }
     #[async_trait::async_trait]
     impl ToolRegistration for PowerShellTool {
@@ -271,13 +315,26 @@ pub fn create_powershell_tool(
             let command = args["command"].as_str().unwrap_or_default();
             let timeout = args["timeout"].as_f64();
             validate_timeout(timeout)?;
+            let execution = prepare_execution(
+                command,
+                self.options.command_prefix.as_deref(),
+                self.options.prepare.as_ref(),
+                api.as_ref(),
+                Arc::clone(&context),
+            )
+            .await?;
             let env = require_env(api.as_ref())?;
-            let execution = prepare_execution(command, &self.options, env.as_ref());
             let script = format!("{UTF8_OUTPUT}\n{}", execution.command);
-            let commands = ["pwsh", "powershell"]
-                .into_iter()
+            let default_programs = ["pwsh".to_string(), "powershell".to_string()];
+            let programs = self
+                .options
+                .programs
+                .as_deref()
+                .unwrap_or(&default_programs);
+            let commands = programs
+                .iter()
                 .map(|program| {
-                    let mut argv = vec![program.to_string()];
+                    let mut argv = vec![program.clone()];
                     argv.extend(POWERSHELL_ARGS.iter().map(|arg| (*arg).to_string()));
                     argv.push(script.clone());
                     ShellCommand::Argv(argv)

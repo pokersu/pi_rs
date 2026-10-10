@@ -20,7 +20,7 @@ use crate::auth::types::{
 };
 use crate::types::{
     AbortSignal, AssistantMessageEvent, Context, DeferredCancelOptions, DeferredFetchOptions,
-    DeferredHandle, ErrorStopReason, Model, ModelThinkingLevel, ProviderHeaders,
+    DeferredHandle, ErrorStopReason, Model, ModelThinkingLevel, ProviderEnv, ProviderHeaders,
     SimpleStreamOptions, StreamFunction, Usage, UsageCost,
 };
 use crate::utils::abort::{BoxError, operation_signal, race_with_abort_signal};
@@ -265,9 +265,11 @@ impl Models {
                     if let Some(opts) = request_options.as_mut() {
                         opts.stream.request.api_key = resolution.auth.api_key.clone();
                         opts.stream.request.headers = merge_headers(
-                            opts.stream.request.headers.clone(),
                             resolution.auth.headers.clone(),
+                            opts.stream.request.headers.clone(),
                         );
+                        opts.stream.request.env =
+                            merge_env(resolution.env.as_ref(), opts.stream.request.env.as_ref());
                     }
                     let inner =
                         provider.stream_simple(&request_model, &context, request_options.as_ref());
@@ -369,9 +371,11 @@ impl Models {
                     if let Some(opts) = request_options.as_mut() {
                         opts.request.api_key = resolution.auth.api_key.clone();
                         opts.request.headers = merge_headers(
-                            opts.request.headers.clone(),
                             resolution.auth.headers.clone(),
+                            opts.request.headers.clone(),
                         );
+                        opts.request.env =
+                            merge_env(resolution.env.as_ref(), opts.request.env.as_ref());
                     }
                     match provider.fetch_deferred(&request_model, &handle, request_options.as_ref())
                     {
@@ -484,7 +488,8 @@ impl Models {
         }
         if let Some(opts) = options.as_mut() {
             opts.api_key = resolution.auth.api_key.clone();
-            opts.headers = merge_headers(opts.headers.clone(), resolution.auth.headers.clone());
+            opts.headers = merge_headers(resolution.auth.headers.clone(), opts.headers.clone());
+            opts.env = merge_env(resolution.env.as_ref(), opts.env.as_ref());
         }
         provider
             .cancel_deferred(&model, &handle, options.as_ref())
@@ -852,6 +857,25 @@ fn merge_headers(
                 base.insert(name, value);
             }
             Some(base)
+        }
+    }
+}
+
+/// 对应 applyAuth 里的 env 合并：`{ ...resolution.env, ...options.env }`（请求选项覆盖解析结果）。
+fn merge_env(
+    resolution: Option<&ProviderEnv>,
+    options: Option<&ProviderEnv>,
+) -> Option<ProviderEnv> {
+    match (resolution, options) {
+        (None, None) => None,
+        (Some(resolution), None) => Some(resolution.clone()),
+        (None, Some(options)) => Some(options.clone()),
+        (Some(resolution), Some(options)) => {
+            let mut merged = resolution.clone();
+            for (key, value) in options {
+                merged.insert(key.clone(), value.clone());
+            }
+            Some(merged)
         }
     }
 }

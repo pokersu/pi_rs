@@ -140,8 +140,10 @@ impl JsonlStorage {
         context: &dyn Context,
     ) -> Result<Seq, StorageError> {
         self.assert_usable()?;
-        // 先预校验：Rejected（如重复 ID）在任何持久化前返回，不写盘也不 poison。
-        self.memory.validate_writes(writes)?;
+        // 先展开 document.copy（物化源 → create），再预校验。
+        // Rejected（如重复 ID）在任何持久化前返回，不写盘也不 poison。
+        let writes = self.memory.resolve_document_copies(writes)?;
+        self.memory.validate_writes(&writes)?;
         let seq = {
             let mut guard = self.next_seq.lock().expect("next_seq");
             let seq = Seq::new(*guard);
@@ -149,8 +151,8 @@ impl JsonlStorage {
             seq
         };
 
-        let EncodedCommit { marker, sidecars } =
-            encode_commit(seq, writes).map_err(|error| StorageError::Message(error.to_string()))?;
+        let EncodedCommit { marker, sidecars } = encode_commit(seq, &writes)
+            .map_err(|error| StorageError::Message(error.to_string()))?;
 
         // 两阶段：先 sidecar，后主标记 —— 主标记出现即代表整次提交可见。
         for (file, content) in &sidecars {
@@ -179,7 +181,7 @@ impl JsonlStorage {
         }
 
         self.memory
-            .commit(writes, context)
+            .commit(&writes, context)
             .await
             .map_err(|error| self.record_failure(error))?;
         Ok(seq)

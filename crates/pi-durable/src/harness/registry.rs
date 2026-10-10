@@ -102,8 +102,15 @@ impl RegistryImpl {
     }
 
     /// 通知监听者。
+    ///
+    /// 对应上游 `#publish`：先快照监听者数组再逐个调用，不在持锁状态下调用监听者，
+    /// 这样监听者回调内再 subscribe/install/uninstall（重新获取 listeners 锁）不会死锁。
     fn notify(&self) {
-        for listener in self.listeners.lock().expect("listeners").iter() {
+        let listeners: Vec<Arc<dyn Fn() + Send + Sync>> = {
+            let guard = self.listeners.lock().expect("listeners");
+            guard.iter().cloned().collect()
+        };
+        for listener in listeners {
             listener();
         }
     }

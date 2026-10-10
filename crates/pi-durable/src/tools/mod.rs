@@ -13,9 +13,12 @@ pub mod path_utils;
 pub mod read;
 pub mod write;
 
-pub use bash::{BashToolOptions, create_bash_tool, create_powershell_tool};
-pub use edit::create_edit_tool;
-pub use read::create_read_tool;
+pub use bash::{
+    BashExecution, BashPrepare, BashToolOptions, PowerShellToolOptions, create_bash_tool,
+    create_powershell_tool,
+};
+pub use edit::{EditToolDetails, create_edit_tool};
+pub use read::{ReadToolDetails, create_read_tool};
 pub use write::create_write_tool;
 
 use std::sync::LazyLock;
